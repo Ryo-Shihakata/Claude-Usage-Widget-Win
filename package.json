@@ -1,16 +1,21 @@
 {
   "name": "claude-usage-widget",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Claude Code の使用量をデスクトップに常時表示するフローティングウィジェット",
   "main": "./out/main/index.js",
-  "author": "",
+  "author": "Ryo-Shihakata",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Ryo-Shihakata/Claude-Usage-Widget-Win.git"
+  },
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "collect": "tsx src/main/usage/collect-cli.ts",
     "package": "electron-vite build && electron-builder --win",
+    "release": "electron-vite build && electron-builder --win --publish always",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json"
   },
   "devDependencies": {
@@ -28,7 +33,8 @@
     "vite": "^5.4.11"
   },
   "dependencies": {
-    "chokidar": "^4.0.1"
+    "chokidar": "^4.0.1",
+    "electron-updater": "^6.3.9"
   },
   "build": {
     "appId": "dev.local.claude-usage-widget",
@@ -36,6 +42,13 @@
     "directories": {
       "output": "release"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Ryo-Shihakata",
+        "repo": "Claude-Usage-Widget-Win"
+      }
+    ],
     "files": [
       "out/**/*"
     ],

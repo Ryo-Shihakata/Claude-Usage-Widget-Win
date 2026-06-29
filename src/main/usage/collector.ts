@@ -242,6 +242,7 @@ function buildLimit(
     windowTokens,
     baselineTokens: baseline,
     fraction: Math.min(1, windowTokens / baseline),
-    windowResetsAt: Number.isFinite(oldest) ? new Date(oldest + windowMs).toISOString() : null
+    windowResetsAt: Number.isFinite(oldest) ? new Date(oldest + windowMs).toISOString() : null,
+    source: 'local'
   }
 }
