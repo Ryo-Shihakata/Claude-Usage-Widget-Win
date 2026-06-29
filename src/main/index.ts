@@ -4,6 +4,7 @@ import { existsSync } from 'fs'
 import { createWidgetWindow, type WindowBounds } from './window'
 import { JsonStore } from './store'
 import { UsageWatcher } from './usage/watcher'
+import { openClaudeLogin, isClaudeLoggedIn } from './usage/officialUsage'
 import { renderTrayIcon } from './trayIcon'
 import electronUpdater from 'electron-updater'
 import { IPC } from '../shared/ipc'
@@ -99,12 +100,29 @@ function refreshTrayMenu(): void {
         refreshTrayMenu()
       }
     },
+    {
+      label: '公式 /usage を使う（実験的）',
+      type: 'checkbox',
+      checked: s.useOfficialUsage,
+      click: (item) => {
+        settingsStore.set({ useOfficialUsage: item.checked })
+        if (item.checked) void ensureClaudeLogin()
+        void watcher?.tick()
+        refreshTrayMenu()
+      }
+    },
+    { label: 'claude.ai にログイン（公式 /usage 用）', click: () => openClaudeLogin() },
     { type: 'separator' },
     { label: '今すぐ更新', click: () => void watcher?.tick() },
     { type: 'separator' },
     { label: '終了', click: () => app.quit() }
   ])
   tray.setContextMenu(menu)
+}
+
+/** 公式 /usage 利用時、未ログインならログインウィンドウを開く */
+async function ensureClaudeLogin(): Promise<void> {
+  if (!(await isClaudeLoggedIn())) openClaudeLogin()
 }
 
 function toggleWindow(): void {
@@ -121,7 +139,10 @@ function registerIpc(): void {
     if (patch.launchAtLogin !== undefined) {
       app.setLoginItemSettings({ openAtLogin: next.launchAtLogin })
     }
-    watcher?.emitCurrent()
+    if (patch.useOfficialUsage === true) void ensureClaudeLogin()
+    // 公式トグル変更時は再取得（emitCurrent は再フェッチしないため tick を使う）
+    if (patch.useOfficialUsage !== undefined) void watcher?.tick()
+    else watcher?.emitCurrent()
     refreshTrayMenu()
     return next
   })

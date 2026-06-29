@@ -1,99 +1,146 @@
-import { join } from 'path'
-import { promises as fs } from 'fs'
-import { defaultClaudeDir } from './collector'
+import { session as electronSession, net, BrowserWindow } from 'electron'
 import type { PlanLimit, UsageLimits } from '../../shared/types'
 
 /**
  * 公式 /usage 実データ（オプトイン）。
  *
- * ⚠️ 重要: この使用量エンドポイントは**非公開**で、レスポンス形状は確定検証できていない
- * （開発サンドボックスではトークン参照がブロックされ、実APIも叩けないため）。
- * 実機で 1 度レスポンスを確認し、必要なら `ENDPOINT` と `mapResponse()` を実形状に合わせて
- * 調整すること。取得・解析に失敗した場合は null を返し、呼び出し側はローカル推定へフォールバックする
- * （＝壊れても害が無い設計）。エンドポイントは環境変数 `CUW_USAGE_ENDPOINT` で上書き可能。
+ * 方式（https://zenn.dev/nihondo/articles/af972fa985f5ac を参考）:
+ *   - エンドポイント: GET https://claude.ai/api/organizations/{orgId}/usage
+ *   - 認証: claude.ai の**セッションCookie**（API の OAuth トークンではない）
+ *   - orgId: Cookie `lastActiveOrgId` から取得
+ *   - レスポンス: { five_hour:{utilization,resets_at}, seven_day:{utilization,resets_at} }
+ *     （utilization は 0..100 のパーセント）
+ *
+ * Cookie は Electron の永続パーティションに保持し、ユーザーは専用ウィンドウで
+ * claude.ai に一度ログインする。以降はそのセッションで自動的に Cookie が付く。
+ * ⚠️ 非公開 Web API。claude.ai 側の仕様変更で動かなくなる可能性あり（その場合は
+ * ローカル推定へ自動フォールバック）。
  */
-const ENDPOINT =
-  process.env.CUW_USAGE_ENDPOINT || 'https://api.anthropic.com/api/oauth/usage'
 
-/** ~/.claude/.credentials.json から OAuth アクセストークンを読む（ユーザー自身のマシン上の自分のトークン） */
-async function readAccessToken(): Promise<string | null> {
-  const path = join(defaultClaudeDir(), '.credentials.json')
+const PARTITION = 'persist:claudeai'
+const ORIGIN = process.env.CUW_USAGE_ORIGIN || 'https://claude.ai'
+// 一部サイトは "Electron" UA を弾くため、通常の Chrome UA を名乗る
+const UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+
+let loginWindow: BrowserWindow | null = null
+
+function claudeSession(): Electron.Session {
+  return electronSession.fromPartition(PARTITION)
+}
+
+/** claude.ai にログイン済みか（セッションCookieの有無で判定） */
+export async function isClaudeLoggedIn(): Promise<boolean> {
   try {
-    const raw = await fs.readFile(path, 'utf8')
-    const j = JSON.parse(raw)
-    return j?.claudeAiOauth?.accessToken ?? j?.accessToken ?? j?.access_token ?? null
+    const cookies = await claudeSession().cookies.get({ url: ORIGIN })
+    return cookies.some((c) => c.name === 'sessionKey' || c.name === 'lastActiveOrgId')
+  } catch {
+    return false
+  }
+}
+
+/** claude.ai ログイン用ウィンドウを開く（永続パーティションに Cookie を保存） */
+export function openClaudeLogin(): void {
+  if (loginWindow && !loginWindow.isDestroyed()) {
+    loginWindow.focus()
+    return
+  }
+  loginWindow = new BrowserWindow({
+    width: 460,
+    height: 760,
+    title: 'claude.ai ログイン',
+    autoHideMenuBar: true,
+    webPreferences: {
+      partition: PARTITION,
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  })
+  loginWindow.on('closed', () => {
+    loginWindow = null
+  })
+  void loginWindow.loadURL(`${ORIGIN}/login`, { userAgent: UA })
+}
+
+/** Cookie から組織ID（lastActiveOrgId）を取得 */
+async function getOrgId(): Promise<string | null> {
+  try {
+    const cookies = await claudeSession().cookies.get({ url: ORIGIN })
+    const org = cookies.find((c) => c.name === 'lastActiveOrgId')
+    return org?.value ? decodeURIComponent(org.value) : null
   } catch {
     return null
   }
 }
 
-/** util（0..1 または 0..100）と reset 時刻から PlanLimit を作る */
-function toLimit(util: unknown, resetsAt: unknown): PlanLimit | null {
-  if (typeof util !== 'number' || Number.isNaN(util)) return null
-  const fraction = Math.max(0, Math.min(1, util > 1 ? util / 100 : util))
+/** five_hour / seven_day の1枠を PlanLimit に変換 */
+function toLimit(w: any): PlanLimit | null {
+  if (!w || typeof w.utilization !== 'number') return null
+  const fraction = Math.max(0, Math.min(1, w.utilization / 100))
+  const reset = w.resets_at ?? w.resetsAt ?? null
   let iso: string | null = null
-  if (typeof resetsAt === 'number') {
-    // epoch 秒/ミリ秒どちらでも許容
-    iso = new Date(resetsAt < 1e12 ? resetsAt * 1000 : resetsAt).toISOString()
-  } else if (typeof resetsAt === 'string') {
-    const d = Date.parse(resetsAt)
-    iso = Number.isNaN(d) ? null : new Date(d).toISOString()
+  if (typeof reset === 'string') {
+    const t = Date.parse(reset)
+    iso = Number.isNaN(t) ? null : new Date(t).toISOString()
   }
-  return {
-    windowTokens: 0,
-    baselineTokens: 0,
-    fraction,
-    windowResetsAt: iso,
-    source: 'official'
-  }
+  return { windowTokens: 0, baselineTokens: 0, fraction, windowResetsAt: iso, source: 'official' }
 }
 
-/** 1枠分のオブジェクトから utilization/reset を緩く拾う */
-function pickWindow(obj: any): PlanLimit | null {
-  if (!obj || typeof obj !== 'object') return null
-  const util =
-    obj.utilization ?? obj.used_fraction ?? obj.percent ?? obj.usage ?? obj.used ?? undefined
-  const reset = obj.resets_at ?? obj.reset_at ?? obj.resetsAt ?? obj.reset ?? obj.expires_at
-  return toLimit(util, reset)
+function mapUsage(data: any): UsageLimits | null {
+  const five = toLimit(data?.five_hour)
+  const week = toLimit(data?.seven_day)
+  if (!five || !week) return null
+  return { fiveHour: five, weekly: week }
 }
 
-/**
- * レスポンス JSON から 5時間枠 / 週間枠 を抽出（複数の想定形状を緩く試す）。
- * 実形状が判明したらここを単純化すること。
- */
-function mapResponse(data: any): UsageLimits | null {
-  if (!data || typeof data !== 'object') return null
-  const root = data.unified_rate_limit ?? data.rate_limit ?? data.usage ?? data
-
-  const fiveSrc = root.five_hour ?? root.fiveHour ?? root['5h'] ?? root.session
-  const weekSrc = root.seven_day ?? root.sevenDay ?? root['7d'] ?? root.weekly ?? root.week
-
-  const fiveHour = pickWindow(fiveSrc)
-  const weekly = pickWindow(weekSrc)
-  if (!fiveHour || !weekly) return null
-  return { fiveHour, weekly }
-}
-
-/** 公式使用量を取得。失敗時は null（呼び出し側はローカル推定を使う）。 */
-export async function fetchOfficialLimits(timeoutMs = 5000): Promise<UsageLimits | null> {
-  const token = await readAccessToken()
-  if (!token) return null
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
-  try {
-    const res = await fetch(ENDPOINT, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'anthropic-beta': 'oauth-2025-04-20',
-        'Content-Type': 'application/json'
-      },
-      signal: ctrl.signal
+/** claude.ai の usage エンドポイントをセッションCookie付きで叩く */
+function requestUsage(orgId: string, timeoutMs: number): Promise<UsageLimits | null> {
+  return new Promise((resolve) => {
+    const req = net.request({
+      method: 'GET',
+      url: `${ORIGIN}/api/organizations/${orgId}/usage`,
+      session: claudeSession(),
+      useSessionCookies: true
     })
-    if (!res.ok) return null
-    return mapResponse(await res.json())
-  } catch {
-    return null
-  } finally {
-    clearTimeout(timer)
-  }
+    req.setHeader('Accept', 'application/json')
+    req.setHeader('User-Agent', UA)
+    const timer = setTimeout(() => {
+      try {
+        req.abort()
+      } catch {
+        /* noop */
+      }
+      resolve(null)
+    }, timeoutMs)
+    let body = ''
+    req.on('response', (res) => {
+      if (res.statusCode !== 200) {
+        clearTimeout(timer)
+        res.on('data', () => {})
+        res.on('end', () => resolve(null))
+        return
+      }
+      res.on('data', (chunk) => (body += chunk.toString()))
+      res.on('end', () => {
+        clearTimeout(timer)
+        try {
+          resolve(mapUsage(JSON.parse(body)))
+        } catch {
+          resolve(null)
+        }
+      })
+    })
+    req.on('error', () => {
+      clearTimeout(timer)
+      resolve(null)
+    })
+    req.end()
+  })
+}
+
+/** 公式使用量を取得。未ログイン・失敗時は null（呼び出し側はローカル推定を使う）。 */
+export async function fetchOfficialLimits(timeoutMs = 6000): Promise<UsageLimits | null> {
+  const orgId = await getOrgId()
+  if (!orgId) return null
+  return requestUsage(orgId, timeoutMs)
 }
