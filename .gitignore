@@ -5,3 +5,4 @@ dist/
 .cuw-test-*/
 *.log
 .DS_Store
+*.tsbuildinfo

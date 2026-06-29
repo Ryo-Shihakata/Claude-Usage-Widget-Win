@@ -4,7 +4,11 @@ import { existsSync } from 'fs'
 import { createWidgetWindow, type WindowBounds } from './window'
 import { JsonStore } from './store'
 import { UsageWatcher } from './usage/watcher'
+import { renderTrayIcon } from './trayIcon'
+import electronUpdater from 'electron-updater'
 import { IPC } from '../shared/ipc'
+
+const { autoUpdater } = electronUpdater
 import { DEFAULT_SETTINGS, type UsageSnapshot, type WidgetSettings } from '../shared/types'
 
 let win: BrowserWindow | null = null
@@ -33,6 +37,18 @@ function resolveIconPath(): string {
 function pushSnapshot(snap: UsageSnapshot): void {
   lastSnapshot = snap
   win?.webContents.send(IPC.usageUpdate, snap)
+  updateTrayIndicator(snap)
+}
+
+/** トレイのアイコン（リングゲージ）とツールチップを最新の使用量で更新 */
+function updateTrayIndicator(snap: UsageSnapshot): void {
+  if (!tray) return
+  const f5 = snap.limits.fiveHour.fraction
+  const fw = snap.limits.weekly.fraction
+  tray.setImage(nativeImage.createFromBuffer(renderTrayIcon(Math.max(f5, fw))))
+  tray.setToolTip(
+    `Claude Usage\n5時間: ${Math.round(f5 * 100)}%  /  1週間: ${Math.round(fw * 100)}%`
+  )
 }
 
 function applyAlwaysOnTop(value: boolean): void {
@@ -116,6 +132,18 @@ function registerIpc(): void {
   ipcMain.on(IPC.quit, () => app.quit())
 }
 
+/** GitHub Releases からの自動アップデート（パッケージ版のみ）。 */
+function setupAutoUpdate(): void {
+  if (!app.isPackaged) return // dev では無効（dev-app-update.yml が無く例外になるため）
+  autoUpdater.autoDownload = true
+  autoUpdater.on('error', (e) => console.error('[autoUpdater]', e))
+  const check = (): void => {
+    autoUpdater.checkForUpdatesAndNotify().catch((e) => console.error('[autoUpdater]', e))
+  }
+  check() // 起動時
+  setInterval(check, 6 * 60 * 60 * 1000) // 6時間ごと。DL完了で通知し、次回終了時に適用。
+}
+
 app.whenReady().then(async () => {
   settingsStore = new JsonStore<WidgetSettings>('settings.json', DEFAULT_SETTINGS)
   boundsStore = new JsonStore<WindowBounds>('window-bounds.json', {})
@@ -143,6 +171,8 @@ app.whenReady().then(async () => {
     (snap) => pushSnapshot(snap)
   )
   await watcher.start()
+
+  setupAutoUpdate()
 })
 
 app.on('second-instance', () => {

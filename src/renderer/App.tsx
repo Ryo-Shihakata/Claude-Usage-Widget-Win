@@ -84,6 +84,14 @@ export function App(): JSX.Element {
             />
             <span>OS起動時に自動起動</span>
           </label>
+          <label className="setting-row checkbox">
+            <input
+              type="checkbox"
+              checked={settings.useOfficialUsage}
+              onChange={(e) => void updateSettings({ useOfficialUsage: e.target.checked })}
+            />
+            <span>公式 /usage を使う（実験的）</span>
+          </label>
         </div>
       )}
 

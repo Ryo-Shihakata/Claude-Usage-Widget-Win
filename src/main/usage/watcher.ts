@@ -1,6 +1,7 @@
 import { join } from 'path'
 import chokidar, { type FSWatcher } from 'chokidar'
 import { UsageCollector, defaultClaudeDir } from './collector'
+import { fetchOfficialLimits } from './officialUsage'
 import type { UsageSnapshot, WidgetSettings } from '../../shared/types'
 
 /**
@@ -58,7 +59,7 @@ export class UsageWatcher {
     try {
       const { found } = await this.collector.refresh()
       this.found = found
-      this.onSnapshot(this.collector.buildSnapshot(this.getSettings(), found))
+      await this.buildAndEmit(found)
     } catch (e) {
       // 集計失敗はウィジェットを落とさず無視（次の tick で回復）
       console.error('[UsageWatcher] tick failed:', e)
@@ -67,7 +68,18 @@ export class UsageWatcher {
 
   /** 再スキャンせず、現在のレコードから即座に再生成（設定変更時など） */
   emitCurrent(): void {
-    this.onSnapshot(this.collector.buildSnapshot(this.getSettings(), this.found))
+    void this.buildAndEmit(this.found)
+  }
+
+  /** ローカル集計でスナップショットを作り、オプトイン時は公式実データで limits を上書きして通知 */
+  private async buildAndEmit(found: boolean): Promise<void> {
+    const settings = this.getSettings()
+    const snap = this.collector.buildSnapshot(settings, found)
+    if (settings.useOfficialUsage) {
+      const official = await fetchOfficialLimits().catch(() => null)
+      if (official) snap.limits = official // 取得できた時だけ上書き。失敗時はローカル推定のまま
+    }
+    this.onSnapshot(snap)
   }
 
   stop(): void {

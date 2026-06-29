@@ -26,14 +26,16 @@ export interface WindowAggregate {
  * 公式 `/usage` の残量とは異なる（公式値はローカルに存在しない）。
  */
 export interface PlanLimit {
-  /** この枠で消費したトークン（input+output+cache合計） */
+  /** この枠で消費したトークン（input+output+cache合計）。official 時は省略され得る */
   windowTokens: number
-  /** 設定された基準値（この値で 100% とみなす） */
+  /** 設定された基準値（この値で 100% とみなす）。official 時は意味を持たない */
   baselineTokens: number
   /** 0..1 にクランプした消費率 */
   fraction: number
   /** 枠内の最も古いメッセージが枠から外れる推定時刻(ISO)。データが無ければ null */
   windowResetsAt: string | null
+  /** 値の出所: 'local'=ローカル集計の推定 / 'official'=公式 /usage 実データ */
+  source: 'local' | 'official'
 }
 
 /** 2種のレート制限枠（推定） */
@@ -71,6 +73,12 @@ export interface WidgetSettings {
   alwaysOnTop: boolean
   /** OS起動時に自動起動 */
   launchAtLogin: boolean
+  /**
+   * 公式 /usage 実データを使う（オプトイン・既定OFF）。
+   * ON の場合 ~/.claude/.credentials.json のトークンで使用量エンドポイントを叩く。
+   * 取得失敗時はローカル推定へ自動フォールバック。
+   */
+  useOfficialUsage: boolean
 }
 
 export const DEFAULT_SETTINGS: WidgetSettings = {
@@ -78,7 +86,8 @@ export const DEFAULT_SETTINGS: WidgetSettings = {
   weeklyBaselineTokens: 430_000_000,
   showCost: true,
   alwaysOnTop: true,
-  launchAtLogin: true
+  launchAtLogin: true,
+  useOfficialUsage: false
 }
 
 /** 空の集計 */
