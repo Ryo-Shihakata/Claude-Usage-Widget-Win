@@ -1,5 +1,5 @@
 import { session as electronSession, net, BrowserWindow } from 'electron'
-import type { PlanLimit, UsageLimits } from '../../shared/types'
+import type { LabeledLimit, PlanLimit, UsageLimits } from '../../shared/types'
 
 /**
  * 公式 /usage 実データ（オプトイン）。
@@ -58,6 +58,7 @@ export function openClaudeLogin(): void {
   })
   loginWindow.on('closed', () => {
     loginWindow = null
+    clearOfficialCache() // ログイン直後は次の tick で即再取得させる
   })
   void loginWindow.loadURL(`${ORIGIN}/login`, { userAgent: UA })
 }
@@ -86,11 +87,39 @@ function toLimit(w: any): PlanLimit | null {
   return { windowTokens: 0, baselineTokens: 0, fraction, windowResetsAt: iso, source: 'official' }
 }
 
+/** 追加枠のキー名を日本語ラベルへ（未知キーは整形して表示） */
+function labelFor(key: string): string {
+  const known: Record<string, string> = {
+    seven_day_opus: '週(Opus)',
+    seven_day_oauth_apps: '週(アプリ)',
+    five_hour_opus: '5時間(Opus)'
+  }
+  if (known[key]) return known[key]
+  return key
+    .replace(/seven_day/g, '週')
+    .replace(/five_hour/g, '5時間')
+    .replace(/_/g, ' ')
+    .replace(/opus/gi, 'Opus')
+    .trim()
+}
+
+/**
+ * レスポンスを UsageLimits に変換。five_hour/seven_day は必須、
+ * その他の `utilization` を持つキーは extras（例: 週(Opus)）として拾う。
+ * 実レスポンス形状は未検証のため防御的に処理する。
+ */
 function mapUsage(data: any): UsageLimits | null {
-  const five = toLimit(data?.five_hour)
-  const week = toLimit(data?.seven_day)
+  if (!data || typeof data !== 'object') return null
+  const five = toLimit(data.five_hour)
+  const week = toLimit(data.seven_day)
   if (!five || !week) return null
-  return { fiveHour: five, weekly: week }
+  const extras: LabeledLimit[] = []
+  for (const [key, val] of Object.entries(data)) {
+    if (key === 'five_hour' || key === 'seven_day') continue
+    const lim = toLimit(val)
+    if (lim) extras.push({ label: labelFor(key), limit: lim })
+  }
+  return { fiveHour: five, weekly: week, extras: extras.length ? extras : undefined }
 }
 
 /** claude.ai の usage エンドポイントをセッションCookie付きで叩く */
@@ -138,9 +167,21 @@ function requestUsage(orgId: string, timeoutMs: number): Promise<UsageLimits | n
   })
 }
 
+// 成功結果は 60 秒キャッシュ（クラウド既定ONだと tick 毎に呼ばれるため claude.ai を叩きすぎない）
+let cache: { at: number; value: UsageLimits } | null = null
+const CACHE_MS = 60_000
+
 /** 公式使用量を取得。未ログイン・失敗時は null（呼び出し側はローカル推定を使う）。 */
 export async function fetchOfficialLimits(timeoutMs = 6000): Promise<UsageLimits | null> {
+  if (cache && Date.now() - cache.at < CACHE_MS) return cache.value
   const orgId = await getOrgId()
-  if (!orgId) return null
-  return requestUsage(orgId, timeoutMs)
+  if (!orgId) return null // 未ログイン: ネットワーク呼び出しなし
+  const value = await requestUsage(orgId, timeoutMs)
+  if (value) cache = { at: Date.now(), value }
+  return value
+}
+
+/** キャッシュを破棄（ログイン直後などに即再取得したいとき） */
+export function clearOfficialCache(): void {
+  cache = null
 }

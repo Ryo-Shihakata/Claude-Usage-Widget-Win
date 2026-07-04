@@ -8,6 +8,8 @@ export const IPC = {
   settingsSet: 'settings:set',
   /** renderer→主: 即時再集計を要求 */
   refresh: 'usage:refresh',
+  /** renderer→主: claude.ai ログインウィンドウを開く（公式 /usage 用） */
+  claudeLogin: 'claude:login',
   /** renderer→主: ウィンドウを閉じる/終了 */
   quit: 'app:quit'
 } as const

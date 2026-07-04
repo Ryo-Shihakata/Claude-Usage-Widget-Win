@@ -37,6 +37,7 @@ function resolveIconPath(): string {
 
 function pushSnapshot(snap: UsageSnapshot): void {
   lastSnapshot = snap
+  applyWindowHeight(snap)
   win?.webContents.send(IPC.usageUpdate, snap)
   updateTrayIndicator(snap)
 }
@@ -55,6 +56,36 @@ function updateTrayIndicator(snap: UsageSnapshot): void {
 function applyAlwaysOnTop(value: boolean): void {
   if (!win) return
   win.setAlwaysOnTop(value, 'screen-saver')
+}
+
+/**
+ * OS ログイン時自動起動の登録。
+ * dev では process.execPath が素の electron.exe を指すため、これを登録すると
+ * 次回 OS ログイン時に「Electron デモ（welcome画面）」が起動してしまう。
+ * よって dev では常に解除し、stale なスタートアップ登録も掃除する。
+ */
+function applyLoginItem(enabled: boolean): void {
+  if (app.isPackaged) {
+    app.setLoginItemSettings({ openAtLogin: enabled })
+  } else {
+    app.setLoginItemSettings({ openAtLogin: false })
+  }
+}
+
+const WIN_WIDTH = 270
+let lastWinHeight = 0
+
+/** 表示内容（コスト表示・追加ゲージ数）に合わせてウィンドウ高さを調整（ステータスバーを底に保つ） */
+function applyWindowHeight(snap: UsageSnapshot): void {
+  if (!win) return
+  const showCost = settingsStore.get().showCost
+  const extras = snap.limits.extras?.length ?? 0
+  // 概算（実機で微調整可）: ヘッダ+利用枠(2ゲージ)+トークン+ステータスバー+余白 を base とし、
+  // コスト表示と追加ゲージ分を加算。
+  const height = 258 + (showCost ? 58 : 0) + extras * 44
+  if (height === lastWinHeight) return
+  lastWinHeight = height
+  win.setSize(WIN_WIDTH, height)
 }
 
 function buildTray(): void {
@@ -96,7 +127,7 @@ function refreshTrayMenu(): void {
       checked: s.launchAtLogin,
       click: (item) => {
         settingsStore.set({ launchAtLogin: item.checked })
-        app.setLoginItemSettings({ openAtLogin: item.checked })
+        applyLoginItem(item.checked)
         refreshTrayMenu()
       }
     },
@@ -137,7 +168,7 @@ function registerIpc(): void {
     const next = settingsStore.set(patch)
     if (patch.alwaysOnTop !== undefined) applyAlwaysOnTop(next.alwaysOnTop)
     if (patch.launchAtLogin !== undefined) {
-      app.setLoginItemSettings({ openAtLogin: next.launchAtLogin })
+      applyLoginItem(next.launchAtLogin)
     }
     if (patch.useOfficialUsage === true) void ensureClaudeLogin()
     // 公式トグル変更時は再取得（emitCurrent は再フェッチしないため tick を使う）
@@ -150,6 +181,7 @@ function registerIpc(): void {
     await watcher?.tick()
     return lastSnapshot
   })
+  ipcMain.on(IPC.claudeLogin, () => openClaudeLogin())
   ipcMain.on(IPC.quit, () => app.quit())
 }
 
@@ -184,8 +216,8 @@ app.whenReady().then(async () => {
 
   buildTray()
 
-  // 設定通りの自動起動状態を OS に反映
-  app.setLoginItemSettings({ openAtLogin: settingsStore.get().launchAtLogin })
+  // 設定通りの自動起動状態を OS に反映（dev では登録解除＝stale掃除）
+  applyLoginItem(settingsStore.get().launchAtLogin)
 
   watcher = new UsageWatcher(
     () => settingsStore.get(),

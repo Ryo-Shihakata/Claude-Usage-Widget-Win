@@ -18,6 +18,9 @@ const api = {
   refresh(): Promise<UsageSnapshot | null> {
     return ipcRenderer.invoke(IPC.refresh)
   },
+  loginClaude(): void {
+    ipcRenderer.send(IPC.claudeLogin)
+  },
   quit(): void {
     ipcRenderer.send(IPC.quit)
   }

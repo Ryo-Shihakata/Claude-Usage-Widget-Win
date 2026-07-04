@@ -22,11 +22,17 @@ export function shortModel(model: string): string {
   return model.replace(/^claude-/, '')
 }
 
-/** ISO 時刻を「HH:MM まで」に */
+/** ISO 時刻を「HH:MM」に。今日でなければ「M/D HH:MM」に */
 export function fmtResetTime(iso: string | null): string {
   if (!iso) return '-'
   const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '-'
   const hh = String(d.getHours()).padStart(2, '0')
   const mm = String(d.getMinutes()).padStart(2, '0')
-  return `${hh}:${mm}`
+  const now = new Date()
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  return sameDay ? `${hh}:${mm}` : `${d.getMonth() + 1}/${d.getDate()} ${hh}:${mm}`
 }

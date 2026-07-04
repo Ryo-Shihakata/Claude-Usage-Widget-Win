@@ -14,6 +14,8 @@ interface ModelRate {
 }
 
 const RATES: Record<string, ModelRate> = {
+  'claude-fable-5': { input: 10, output: 50, cacheRead: 1.0, cacheWrite: 12.5 },
+  'claude-mythos-5': { input: 10, output: 50, cacheRead: 1.0, cacheWrite: 12.5 },
   'claude-opus-4-8': { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   'claude-opus-4-7': { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   'claude-opus-4-6': { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
@@ -22,10 +24,11 @@ const RATES: Record<string, ModelRate> = {
   'claude-haiku-4-5': { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 }
 }
 
-/** 完全一致が無い場合に族名から単価を推定（例: 将来の opus / sonnet / haiku 派生） */
+/** 完全一致が無い場合に族名から単価を推定（例: 将来の fable / opus / sonnet / haiku 派生） */
 function resolveRate(model: string): ModelRate | null {
   if (RATES[model]) return RATES[model]
   const lower = model.toLowerCase()
+  if (lower.includes('fable') || lower.includes('mythos')) return RATES['claude-fable-5']
   if (lower.includes('opus')) return RATES['claude-opus-4-8']
   if (lower.includes('sonnet')) return RATES['claude-sonnet-4-6']
   if (lower.includes('haiku')) return RATES['claude-haiku-4-5']

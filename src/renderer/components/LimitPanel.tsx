@@ -29,16 +29,34 @@ function Gauge({ label, plan }: { label: string; plan: PlanLimit }): JSX.Element
   )
 }
 
-export function LimitPanel({ limits }: { limits: UsageLimits }): JSX.Element {
+export function LimitPanel({
+  limits,
+  officialRequested,
+  onLogin
+}: {
+  limits: UsageLimits
+  officialRequested: boolean
+  onLogin: () => void
+}): JSX.Element {
   const official = limits.fiveHour.source === 'official' || limits.weekly.source === 'official'
+  // クラウド希望なのに公式値が出ていない＝未ログイン（or 取得失敗）
+  const needsLogin = officialRequested && !official
   return (
     <div className="panel limits">
       <div className="panel-head">
         <span className="panel-label">利用枠</span>
-        <span className="panel-sub">{official ? '公式 /usage' : '推定（ローカル集計）'}</span>
+        <span className="panel-sub">{official ? '☁ 公式 /usage' : '⌂ 推定（ローカル）'}</span>
       </div>
       <Gauge label="5時間" plan={limits.fiveHour} />
       <Gauge label="1週間" plan={limits.weekly} />
+      {limits.extras?.map((e) => (
+        <Gauge key={e.label} label={e.label} plan={e.limit} />
+      ))}
+      {needsLogin && (
+        <button className="login-hint no-drag" onClick={onLogin}>
+          claude.ai にログインして公式値を表示
+        </button>
+      )}
     </div>
   )
 }
