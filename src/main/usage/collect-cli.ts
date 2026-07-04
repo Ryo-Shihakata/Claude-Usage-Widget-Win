@@ -34,6 +34,7 @@ async function main(): Promise<void> {
   }
   printLimit('5時間枠', snap.limits.fiveHour)
   printLimit('週間枠', snap.limits.weekly)
+  for (const e of snap.limits.extras ?? []) printLimit(e.label, e.limit)
 
   console.log('--- 直近7日（集計） ---')
   console.log(

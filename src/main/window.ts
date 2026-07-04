@@ -14,7 +14,7 @@ export function createWidgetWindow(opts: {
 }): BrowserWindow {
   const win = new BrowserWindow({
     width: 270,
-    height: 286,
+    height: 316,
     x: opts.bounds.x,
     y: opts.bounds.y,
     frame: false,

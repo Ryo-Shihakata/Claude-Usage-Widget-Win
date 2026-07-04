@@ -38,12 +38,20 @@ export interface PlanLimit {
   source: 'local' | 'official'
 }
 
-/** 2種のレート制限枠（推定） */
+/** ラベル付きの追加枠（公式 /usage の「週(Opus)」など） */
+export interface LabeledLimit {
+  label: string
+  limit: PlanLimit
+}
+
+/** レート制限枠。5時間枠・週間枠に加え、公式時は追加枠(extras)を持つことがある。 */
 export interface UsageLimits {
   /** 直近5時間枠 */
   fiveHour: PlanLimit
   /** 直近7日（週間）枠 */
   weekly: PlanLimit
+  /** 公式 /usage が返す追加枠（例: 週(Opus)）。ローカル推定時は無し。 */
+  extras?: LabeledLimit[]
 }
 
 /** renderer に push する1スナップショット */
@@ -67,6 +75,8 @@ export interface WidgetSettings {
   fiveHourBaselineTokens: number
   /** 週間枠ゲージの基準トークン数（分母） */
   weeklyBaselineTokens: number
+  /** Fable/Mythos 専用の週間枠ゲージの基準トークン数（ローカル推定時のみ使用） */
+  fableWeeklyBaselineTokens: number
   /** コストパネルを表示するか */
   showCost: boolean
   /** 常に最前面 */
@@ -74,9 +84,9 @@ export interface WidgetSettings {
   /** OS起動時に自動起動 */
   launchAtLogin: boolean
   /**
-   * 公式 /usage 実データを使う（オプトイン・既定OFF）。
-   * ON の場合 ~/.claude/.credentials.json のトークンで使用量エンドポイントを叩く。
-   * 取得失敗時はローカル推定へ自動フォールバック。
+   * 公式 /usage 実データ（クラウド）を使う（既定ON）。
+   * ON の場合、claude.ai のセッションCookieで使用量を取得し利用枠を公式値に置換。
+   * 未ログイン・取得失敗時はローカル推定へ自動フォールバック。
    */
   useOfficialUsage: boolean
 }
@@ -84,10 +94,11 @@ export interface WidgetSettings {
 export const DEFAULT_SETTINGS: WidgetSettings = {
   fiveHourBaselineTokens: 85_000_000,
   weeklyBaselineTokens: 430_000_000,
+  fableWeeklyBaselineTokens: 150_000_000,
   showCost: true,
   alwaysOnTop: true,
   launchAtLogin: true,
-  useOfficialUsage: false
+  useOfficialUsage: true
 }
 
 /** 空の集計 */

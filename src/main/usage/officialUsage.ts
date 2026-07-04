@@ -1,5 +1,5 @@
 import { session as electronSession, net, BrowserWindow } from 'electron'
-import type { PlanLimit, UsageLimits } from '../../shared/types'
+import type { LabeledLimit, PlanLimit, UsageLimits } from '../../shared/types'
 
 /**
  * 公式 /usage 実データ（オプトイン）。
@@ -22,6 +22,15 @@ const ORIGIN = process.env.CUW_USAGE_ORIGIN || 'https://claude.ai'
 // 一部サイトは "Electron" UA を弾くため、通常の Chrome UA を名乗る
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+
+// 診断ログ: 失敗は常に warn、詳細（本文・成功値）は CUW_DEBUG=1 のときだけ。
+const DEBUG = process.env.CUW_DEBUG === '1' || process.env.CUW_DEBUG === 'true'
+function dbg(...a: unknown[]): void {
+  if (DEBUG) console.log('[official]', ...a)
+}
+function warn(...a: unknown[]): void {
+  console.warn('[official]', ...a)
+}
 
 let loginWindow: BrowserWindow | null = null
 
@@ -58,19 +67,116 @@ export function openClaudeLogin(): void {
   })
   loginWindow.on('closed', () => {
     loginWindow = null
+    clearOfficialCache() // ログイン直後は次の tick で即再取得させる
   })
   void loginWindow.loadURL(`${ORIGIN}/login`, { userAgent: UA })
 }
 
-/** Cookie から組織ID（lastActiveOrgId）を取得 */
-async function getOrgId(): Promise<string | null> {
+/** claude.ai のセッションCookie（sessionKey）があるか＝ログイン済みか */
+async function hasSessionCookie(): Promise<boolean> {
   try {
     const cookies = await claudeSession().cookies.get({ url: ORIGIN })
-    const org = cookies.find((c) => c.name === 'lastActiveOrgId')
-    return org?.value ? decodeURIComponent(org.value) : null
+    return cookies.some((c) => c.name === 'sessionKey' && !!c.value)
   } catch {
-    return null
+    return false
   }
+}
+
+/** claude.ai への GET（セッションCookie付き）。{status, json} を返す。到達不能なら null。 */
+function requestJson(
+  path: string,
+  timeoutMs: number
+): Promise<{ status: number; json: any } | null> {
+  return new Promise((resolve) => {
+    let settled = false
+    const done = (v: { status: number; json: any } | null): void => {
+      if (settled) return
+      settled = true
+      resolve(v)
+    }
+    let req: Electron.ClientRequest
+    try {
+      req = net.request({
+        method: 'GET',
+        url: `${ORIGIN}${path}`,
+        session: claudeSession(),
+        useSessionCookies: true
+      })
+    } catch (e) {
+      warn('request 構築失敗', path, String(e))
+      return done(null)
+    }
+    req.setHeader('Accept', 'application/json')
+    req.setHeader('User-Agent', UA)
+    req.setHeader('Referer', `${ORIGIN}/`)
+    const timer = setTimeout(() => {
+      try {
+        req.abort()
+      } catch {
+        /* noop */
+      }
+      warn('timeout', path)
+      done(null)
+    }, timeoutMs)
+    let body = ''
+    req.on('response', (res) => {
+      const status = res.statusCode
+      res.on('data', (c) => (body += c.toString()))
+      res.on('end', () => {
+        clearTimeout(timer)
+        if (status !== 200) {
+          warn(`GET ${path} -> HTTP ${status}`, DEBUG ? body.slice(0, 400) : '(CUW_DEBUG=1で本文表示)')
+          return done({ status, json: null })
+        }
+        try {
+          done({ status, json: JSON.parse(body) })
+        } catch {
+          warn(`GET ${path} -> 200 だが JSON parse 失敗`, DEBUG ? body.slice(0, 400) : '')
+          done({ status, json: null })
+        }
+      })
+    })
+    req.on('error', (e) => {
+      clearTimeout(timer)
+      warn('network error', path, String(e))
+      done(null)
+    })
+    req.end()
+  })
+}
+
+/**
+ * 組織IDを取得。①Cookie の候補名を試し、②無ければ組織一覧API `/api/organizations` から取得。
+ * Cookie 名は claude.ai 側で変わり得るため、API フォールバックを本命とする。
+ */
+async function getOrgId(timeoutMs: number): Promise<string | null> {
+  // 1. Cookie 候補
+  try {
+    const cookies = await claudeSession().cookies.get({ url: ORIGIN })
+    for (const name of ['lastActiveOrgId', 'lastActiveOrg', 'activeOrganizationUuid', 'orgUuid']) {
+      const c = cookies.find((ck) => ck.name === name)
+      if (c?.value) {
+        dbg('orgId from cookie', name)
+        return decodeURIComponent(c.value)
+      }
+    }
+  } catch {
+    /* fall through to API */
+  }
+  // 2. 組織一覧API
+  const res = await requestJson('/api/organizations', timeoutMs)
+  const list = res?.json
+  if (Array.isArray(list) && list.length > 0) {
+    const id = list[0]?.uuid ?? list[0]?.id
+    if (typeof id === 'string' && id) {
+      dbg('orgId from /api/organizations')
+      return id
+    }
+    warn('/api/organizations は配列だが uuid/id が無い', DEBUG ? JSON.stringify(list).slice(0, 300) : '')
+  } else {
+    warn('orgId 取得失敗', res ? `orgs HTTP=${res.status}` : '応答なし')
+  }
+  return null
 }
 
 /** five_hour / seven_day の1枠を PlanLimit に変換 */
@@ -86,61 +192,85 @@ function toLimit(w: any): PlanLimit | null {
   return { windowTokens: 0, baselineTokens: 0, fraction, windowResetsAt: iso, source: 'official' }
 }
 
-function mapUsage(data: any): UsageLimits | null {
-  const five = toLimit(data?.five_hour)
-  const week = toLimit(data?.seven_day)
-  if (!five || !week) return null
-  return { fiveHour: five, weekly: week }
+/** 追加枠のキー名を日本語ラベルへ（未知キーは整形して表示） */
+function labelFor(key: string): string {
+  const known: Record<string, string> = {
+    seven_day_oauth_apps: '週(アプリ)'
+  }
+  if (known[key]) return known[key]
+  // 一般化: <window>_<model> → 「<窓>(<Model>)」（例: seven_day_opus→週(Opus), seven_day_fable→週(Fable)）
+  const win = key.includes('seven_day') ? '週' : key.includes('five_hour') ? '5時間' : ''
+  const model = key.match(/(fable|mythos|opus|sonnet|haiku)/i)?.[1]
+  if (win && model) {
+    const m = model.charAt(0).toUpperCase() + model.slice(1).toLowerCase()
+    return `${win}(${m})`
+  }
+  return key
+    .replace(/seven_day/g, '週')
+    .replace(/five_hour/g, '5時間')
+    .replace(/_/g, ' ')
+    .trim()
 }
 
-/** claude.ai の usage エンドポイントをセッションCookie付きで叩く */
-function requestUsage(orgId: string, timeoutMs: number): Promise<UsageLimits | null> {
-  return new Promise((resolve) => {
-    const req = net.request({
-      method: 'GET',
-      url: `${ORIGIN}/api/organizations/${orgId}/usage`,
-      session: claudeSession(),
-      useSessionCookies: true
-    })
-    req.setHeader('Accept', 'application/json')
-    req.setHeader('User-Agent', UA)
-    const timer = setTimeout(() => {
-      try {
-        req.abort()
-      } catch {
-        /* noop */
-      }
-      resolve(null)
-    }, timeoutMs)
-    let body = ''
-    req.on('response', (res) => {
-      if (res.statusCode !== 200) {
-        clearTimeout(timer)
-        res.on('data', () => {})
-        res.on('end', () => resolve(null))
-        return
-      }
-      res.on('data', (chunk) => (body += chunk.toString()))
-      res.on('end', () => {
-        clearTimeout(timer)
-        try {
-          resolve(mapUsage(JSON.parse(body)))
-        } catch {
-          resolve(null)
-        }
-      })
-    })
-    req.on('error', () => {
-      clearTimeout(timer)
-      resolve(null)
-    })
-    req.end()
-  })
+/**
+ * レスポンスを UsageLimits に変換。five_hour/seven_day は必須、
+ * その他の `utilization` を持つキーは extras（例: 週(Opus)）として拾う。
+ * 実レスポンス形状は未検証のため防御的に処理する。
+ */
+function mapUsage(data: any): UsageLimits | null {
+  if (!data || typeof data !== 'object') return null
+  const five = toLimit(data.five_hour)
+  const week = toLimit(data.seven_day)
+  if (!five || !week) return null
+  const extras: LabeledLimit[] = []
+  for (const [key, val] of Object.entries(data)) {
+    if (key === 'five_hour' || key === 'seven_day') continue
+    const lim = toLimit(val)
+    if (lim) extras.push({ label: labelFor(key), limit: lim })
+  }
+  return { fiveHour: five, weekly: week, extras: extras.length ? extras : undefined }
 }
+
+/** usage エンドポイントを叩いて UsageLimits に変換 */
+async function fetchUsage(orgId: string, timeoutMs: number): Promise<UsageLimits | null> {
+  const res = await requestJson(`/api/organizations/${orgId}/usage`, timeoutMs)
+  if (!res || res.json == null) return null
+  const mapped = mapUsage(res.json)
+  if (!mapped) {
+    warn(
+      'usage は取得できたが five_hour/seven_day を認識できず',
+      DEBUG ? JSON.stringify(res.json).slice(0, 500) : '(CUW_DEBUG=1で本文表示。キー名を教えてください)'
+    )
+  } else {
+    dbg(
+      'usage OK',
+      `5h=${Math.round(mapped.fiveHour.fraction * 100)}%`,
+      `week=${Math.round(mapped.weekly.fraction * 100)}%`,
+      `extras=${mapped.extras?.length ?? 0}`
+    )
+  }
+  return mapped
+}
+
+// 成功結果は 60 秒キャッシュ（クラウド既定ONだと tick 毎に呼ばれるため claude.ai を叩きすぎない）
+let cache: { at: number; value: UsageLimits } | null = null
+const CACHE_MS = 60_000
 
 /** 公式使用量を取得。未ログイン・失敗時は null（呼び出し側はローカル推定を使う）。 */
 export async function fetchOfficialLimits(timeoutMs = 6000): Promise<UsageLimits | null> {
-  const orgId = await getOrgId()
-  if (!orgId) return null
-  return requestUsage(orgId, timeoutMs)
+  if (cache && Date.now() - cache.at < CACHE_MS) return cache.value
+  if (!(await hasSessionCookie())) {
+    dbg('未ログイン（sessionKey Cookie 無し）→ ローカル推定')
+    return null // 未ログイン: ネットワーク呼び出しなし
+  }
+  const orgId = await getOrgId(timeoutMs)
+  if (!orgId) return null // 失敗理由は getOrgId 内で warn 済み
+  const value = await fetchUsage(orgId, timeoutMs)
+  if (value) cache = { at: Date.now(), value }
+  return value
+}
+
+/** キャッシュを破棄（ログイン直後などに即再取得したいとき） */
+export function clearOfficialCache(): void {
+  cache = null
 }
