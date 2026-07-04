@@ -37,7 +37,6 @@ function resolveIconPath(): string {
 
 function pushSnapshot(snap: UsageSnapshot): void {
   lastSnapshot = snap
-  applyWindowHeight(snap)
   win?.webContents.send(IPC.usageUpdate, snap)
   updateTrayIndicator(snap)
 }
@@ -70,22 +69,6 @@ function applyLoginItem(enabled: boolean): void {
   } else {
     app.setLoginItemSettings({ openAtLogin: false })
   }
-}
-
-const WIN_WIDTH = 270
-let lastWinHeight = 0
-
-/** 表示内容（コスト表示・追加ゲージ数）に合わせてウィンドウ高さを調整（ステータスバーを底に保つ） */
-function applyWindowHeight(snap: UsageSnapshot): void {
-  if (!win) return
-  const showCost = settingsStore.get().showCost
-  const extras = snap.limits.extras?.length ?? 0
-  // 概算（実機で微調整可）: ヘッダ+利用枠(2ゲージ)+トークン+ステータスバー+余白 を base とし、
-  // コスト表示と追加ゲージ分を加算。
-  const height = 258 + (showCost ? 58 : 0) + extras * 44
-  if (height === lastWinHeight) return
-  lastWinHeight = height
-  win.setSize(WIN_WIDTH, height)
 }
 
 function buildTray(): void {
@@ -206,7 +189,7 @@ app.whenReady().then(async () => {
   win = createWidgetWindow({
     bounds: boundsStore.get(),
     alwaysOnTop: settingsStore.get().alwaysOnTop,
-    onMoved: (b) => boundsStore.set(b)
+    onBounds: (b) => boundsStore.set(b)
   })
 
   // renderer が読み込まれたら直近スナップショットを送る

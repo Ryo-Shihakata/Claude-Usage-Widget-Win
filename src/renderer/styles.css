@@ -39,6 +39,7 @@ body {
 }
 
 .widget {
+  position: relative;
   width: 100%;
   height: 100vh;
   background: var(--bg);
@@ -116,12 +117,19 @@ body {
   color: var(--accent);
 }
 
-/* Body (panels + settings overlay) */
+/* Body (scrollable panel area) */
 .body {
   flex: 1 1 auto;
-  position: relative;
   padding: 8px 10px;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.body::-webkit-scrollbar {
+  width: 6px;
+}
+.body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
 }
 .panels {
   display: flex;
@@ -270,6 +278,46 @@ body {
 .cost-cap {
   font-size: 9px;
   color: var(--fg-dim);
+}
+
+/* Daily chart (7-day tokens) */
+.chart-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 52px;
+}
+.chart-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+.chart-track {
+  width: 100%;
+  height: 40px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.chart-bar {
+  width: 72%;
+  min-height: 0;
+  background: var(--accent);
+  opacity: 0.55;
+  border-radius: 3px 3px 0 0;
+  transition: height 0.35s ease;
+}
+.chart-bar.today {
+  opacity: 1;
+}
+.chart-x {
+  font-size: 8px;
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 /* Settings overlay */

@@ -3,6 +3,7 @@ import type { UsageSnapshot, WidgetSettings } from '../shared/types'
 import { LimitPanel } from './components/LimitPanel'
 import { TokenPanel } from './components/TokenPanel'
 import { CostPanel } from './components/CostPanel'
+import { DailyChart } from './components/DailyChart'
 import { Clawd } from './components/Clawd'
 
 function clock(iso: string | undefined): string {
@@ -70,6 +71,7 @@ export function App(): JSX.Element {
                 onLogin={() => window.widget.loginClaude()}
               />
               <TokenPanel today={snap.today} sessionCount={snap.sessionCount} />
+              {(!settings || settings.showChart) && <DailyChart data={snap.daily} />}
               {(!settings || settings.showCost) && (
                 <CostPanel today={snap.today} last7d={snap.last7d} />
               )}
@@ -77,82 +79,6 @@ export function App(): JSX.Element {
           )
         ) : (
           <div className="status">読み込み中…</div>
-        )}
-
-        {showSettings && settings && (
-          <div className="settings-overlay no-drag">
-            <div className="settings">
-              <label className="setting-row">
-                <span>5時間 基準 (Mtok)</span>
-                <input
-                  type="number"
-                  min={1}
-                  value={fiveHM}
-                  onChange={(e) =>
-                    void updateSettings({
-                      fiveHourBaselineTokens: Math.max(1, Number(e.target.value)) * 1e6
-                    })
-                  }
-                />
-              </label>
-              <label className="setting-row">
-                <span>1週間 基準 (Mtok)</span>
-                <input
-                  type="number"
-                  min={1}
-                  value={weeklyM}
-                  onChange={(e) =>
-                    void updateSettings({
-                      weeklyBaselineTokens: Math.max(1, Number(e.target.value)) * 1e6
-                    })
-                  }
-                />
-              </label>
-              <label className="setting-row">
-                <span>週(Fable) 基準 (Mtok)</span>
-                <input
-                  type="number"
-                  min={1}
-                  value={fableM}
-                  onChange={(e) =>
-                    void updateSettings({
-                      fableWeeklyBaselineTokens: Math.max(1, Number(e.target.value)) * 1e6
-                    })
-                  }
-                />
-              </label>
-              <label className="setting-row checkbox">
-                <input
-                  type="checkbox"
-                  checked={settings.showCost}
-                  onChange={(e) => void updateSettings({ showCost: e.target.checked })}
-                />
-                <span>コスト表示</span>
-              </label>
-              <label className="setting-row checkbox">
-                <input
-                  type="checkbox"
-                  checked={settings.launchAtLogin}
-                  onChange={(e) => void updateSettings({ launchAtLogin: e.target.checked })}
-                />
-                <span>OS起動時に自動起動</span>
-              </label>
-              <label className="setting-row checkbox">
-                <input
-                  type="checkbox"
-                  checked={settings.useOfficialUsage}
-                  onChange={(e) => void updateSettings({ useOfficialUsage: e.target.checked })}
-                />
-                <span>公式 /usage（クラウド）を使う</span>
-              </label>
-              <button className="settings-btn" onClick={() => window.widget.loginClaude()}>
-                claude.ai にログイン
-              </button>
-              <button className="settings-btn ghost" onClick={() => setShowSettings(false)}>
-                閉じる
-              </button>
-            </div>
-          </div>
         )}
       </div>
 
@@ -164,6 +90,98 @@ export function App(): JSX.Element {
         <span className="sb-watch">watching ~/.claude</span>
         <span className="sb-time">{clock(snap?.generatedAt)}</span>
       </footer>
+
+      {showSettings && settings && (
+        <div className="settings-overlay no-drag">
+          <div className="settings">
+            <label className="setting-row">
+              <span>5時間 基準 (Mtok)</span>
+              <input
+                type="number"
+                min={1}
+                value={fiveHM}
+                onChange={(e) =>
+                  void updateSettings({
+                    fiveHourBaselineTokens: Math.max(1, Number(e.target.value)) * 1e6
+                  })
+                }
+              />
+            </label>
+            <label className="setting-row">
+              <span>1週間 基準 (Mtok)</span>
+              <input
+                type="number"
+                min={1}
+                value={weeklyM}
+                onChange={(e) =>
+                  void updateSettings({
+                    weeklyBaselineTokens: Math.max(1, Number(e.target.value)) * 1e6
+                  })
+                }
+              />
+            </label>
+            <label className="setting-row">
+              <span>週(Fable) 基準 (Mtok)</span>
+              <input
+                type="number"
+                min={1}
+                value={fableM}
+                onChange={(e) =>
+                  void updateSettings({
+                    fableWeeklyBaselineTokens: Math.max(1, Number(e.target.value)) * 1e6
+                  })
+                }
+              />
+            </label>
+            <label className="setting-row checkbox">
+              <input
+                type="checkbox"
+                checked={settings.showFableWeekly}
+                onChange={(e) => void updateSettings({ showFableWeekly: e.target.checked })}
+              />
+              <span>週(Fable) ゲージを表示</span>
+            </label>
+            <label className="setting-row checkbox">
+              <input
+                type="checkbox"
+                checked={settings.showChart}
+                onChange={(e) => void updateSettings({ showChart: e.target.checked })}
+              />
+              <span>日毎グラフを表示</span>
+            </label>
+            <label className="setting-row checkbox">
+              <input
+                type="checkbox"
+                checked={settings.showCost}
+                onChange={(e) => void updateSettings({ showCost: e.target.checked })}
+              />
+              <span>コスト表示</span>
+            </label>
+            <label className="setting-row checkbox">
+              <input
+                type="checkbox"
+                checked={settings.launchAtLogin}
+                onChange={(e) => void updateSettings({ launchAtLogin: e.target.checked })}
+              />
+              <span>OS起動時に自動起動</span>
+            </label>
+            <label className="setting-row checkbox">
+              <input
+                type="checkbox"
+                checked={settings.useOfficialUsage}
+                onChange={(e) => void updateSettings({ useOfficialUsage: e.target.checked })}
+              />
+              <span>公式 /usage（クラウド）を使う</span>
+            </label>
+            <button className="settings-btn" onClick={() => window.widget.loginClaude()}>
+              claude.ai にログイン
+            </button>
+            <button className="settings-btn ghost" onClick={() => setShowSettings(false)}>
+              閉じる
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

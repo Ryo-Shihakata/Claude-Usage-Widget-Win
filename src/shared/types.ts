@@ -54,6 +54,14 @@ export interface UsageLimits {
   extras?: LabeledLimit[]
 }
 
+/** 1日分のトークン使用量（日毎グラフ用） */
+export interface DailyUsage {
+  /** ローカル日付 'YYYY-MM-DD' */
+  date: string
+  /** その日の合計トークン（input+output+cache） */
+  tokens: number
+}
+
 /** renderer に push する1スナップショット */
 export interface UsageSnapshot {
   /** 生成時刻(ISO) */
@@ -63,6 +71,8 @@ export interface UsageSnapshot {
   last7d: WindowAggregate
   /** 5時間枠・週間枠の消費目安（推定） */
   limits: UsageLimits
+  /** 直近7日の日毎トークン（古い順、常に7要素） */
+  daily: DailyUsage[]
   /** 今日アクティブだった distinct セッション数 */
   sessionCount: number
   /** データソースが見つからない等の状態メッセージ（正常時は null） */
@@ -83,6 +93,10 @@ export interface WidgetSettings {
   alwaysOnTop: boolean
   /** OS起動時に自動起動 */
   launchAtLogin: boolean
+  /** 週(Fable) ゲージを表示するか */
+  showFableWeekly: boolean
+  /** 日毎トークングラフを表示するか */
+  showChart: boolean
   /**
    * 公式 /usage 実データ（クラウド）を使う（既定ON）。
    * ON の場合、claude.ai のセッションCookieで使用量を取得し利用枠を公式値に置換。
@@ -98,6 +112,8 @@ export const DEFAULT_SETTINGS: WidgetSettings = {
   showCost: true,
   alwaysOnTop: true,
   launchAtLogin: true,
+  showFableWeekly: true,
+  showChart: true,
   useOfficialUsage: true
 }
 
