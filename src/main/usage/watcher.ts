@@ -2,7 +2,13 @@ import { join } from 'path'
 import chokidar, { type FSWatcher } from 'chokidar'
 import { UsageCollector, defaultClaudeDir } from './collector'
 import { fetchOfficialLimits } from './officialUsage'
-import type { UsageSnapshot, WidgetSettings } from '../../shared/types'
+import type { LabeledLimit, UsageSnapshot, WidgetSettings } from '../../shared/types'
+
+/** 公式extras（機種別週間枠）にローカルextras（週(Fable)等）を追記。同ラベルは公式優先。 */
+function mergeExtras(official: LabeledLimit[] = [], local: LabeledLimit[] = []): LabeledLimit[] {
+  const seen = new Set(official.map((e) => e.label))
+  return [...official, ...local.filter((e) => !seen.has(e.label))]
+}
 
 /**
  * Claude Code のログを監視し、追記を検知して再集計、スナップショットを push する。
@@ -77,7 +83,11 @@ export class UsageWatcher {
     const snap = this.collector.buildSnapshot(settings, found)
     if (settings.useOfficialUsage) {
       const official = await fetchOfficialLimits().catch(() => null)
-      if (official) snap.limits = official // 取得できた時だけ上書き。失敗時はローカル推定のまま
+      if (official) {
+        // 公式の 5h/週間で上書きしつつ、ローカルの追加枠（週(Fable)等）は残す
+        const merged = mergeExtras(official.extras, snap.limits.extras)
+        snap.limits = { ...official, extras: merged.length ? merged : undefined }
+      }
     }
     this.onSnapshot(snap)
   }

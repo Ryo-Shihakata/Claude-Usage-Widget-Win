@@ -41,6 +41,8 @@ async function main(): Promise<void> {
     `  total ${fmt(snap.last7d.totalTokens)} / ` +
       `msg ${snap.last7d.messageCount} / $${snap.last7d.costUSD.toFixed(4)}`
   )
+  console.log('--- 日毎トークン ---')
+  for (const d of snap.daily) console.log(`  ${d.date}: ${fmt(d.tokens)}`)
 }
 
 main().catch((e) => {

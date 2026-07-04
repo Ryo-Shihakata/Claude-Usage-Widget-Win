@@ -102,19 +102,19 @@ shared/  …… main・renderer 双方が import する型(types.ts)と IPC チ�
 
 | ファイル | 責務 / 主要シンボル |
 | --- | --- |
-| `src/main/index.ts` | ライフサイクル、`buildTray`/`refreshTrayMenu`、`pushSnapshot`、`updateTrayIndicator`（リングゲージ+ツールチップ）、`applyLoginItem(enabled)`（**dev では常にOFF**——§10の新罠を参照）、`applyWindowHeight(snap)`（extras数/コスト表示で高さ動的調整）、`setupAutoUpdate`（electron-updater）、IPC、単一インスタンスロック、トレイ常駐 |
-| `src/main/window.ts` | `createWidgetWindow()`。`frame:false, transparent:true, alwaysOnTop, skipTaskbar, resizable:false`（初期 316px、以後 main が `setSize` で調整）。`moved` で位置保存。dev は `ELECTRON_RENDERER_URL`、prod は `loadFile` |
+| `src/main/index.ts` | ライフサイクル、`buildTray`/`refreshTrayMenu`、`pushSnapshot`、`updateTrayIndicator`（リングゲージ+ツールチップ）、`applyLoginItem(enabled)`（**dev では常にOFF**——§10の新罠を参照）、`setupAutoUpdate`（electron-updater）、IPC、単一インスタンスロック、トレイ常駐 |
+| `src/main/window.ts` | `createWidgetWindow()`。`frame:false, transparent:true, alwaysOnTop, skipTaskbar, **resizable:true**`（min 220×180、既定 280×430）。`moved`/`resize`(400msデバウンス) で `onBounds` により位置＋サイズを永続化。高さの自動調整はしない（内容が溢れたら `.body` が縦スクロール）。dev は `ELECTRON_RENDERER_URL`、prod は `loadFile` |
 | `src/main/store.ts` | `JsonStore<T>`。userData 配下の JSON を読み書き。壊れていればデフォルト |
 | `src/main/trayIcon.ts` | `renderTrayIcon(fraction)`。リングゲージ PNG を zlib で生成（トレイの常時表示用） |
 | `src/main/usage/collector.ts` | **ローカル推定（フォールバック）の中核**。`UsageCollector`。`refresh()`/`buildSnapshot()`/`readNewLines()`/`parseLine()`/`prune()`。`buildLimit()` は `source:'local'`。`buildSnapshot` は 5h/週間に加え、**7日間に Fable/Mythos の使用があれば `limits.extras` に「週(Fable)」ゲージ**を追加。`defaultClaudeDir()` |
 | `src/main/usage/pricing.ts` | `RATES` テーブル（Opus/Sonnet/Haiku/**Fable/Mythos**）＋`resolveRate()`（族名フォールバック、`fable`/`mythos`含む）＋`estimateCost()` |
 | `src/main/usage/officialUsage.ts` | **公式取得（既定）**。`openClaudeLogin()`（永続パーティション `persist:claudeai` で claude.ai ログイン窓。閉じたら `clearOfficialCache()`）/`isClaudeLoggedIn()`/`fetchOfficialLimits()`。フロー: ①`hasSessionCookie()`（`sessionKey` 有無）で未ログインなら通信せず null → ②`getOrgId()`：**Cookie候補名（`lastActiveOrgId`/`lastActiveOrg`/…）を試し、無ければ `GET /api/organizations` の `[0].uuid` を使う**（Cookie名がclaude.ai側で変わっても動くようAPIフォールバックが本命）→ ③`GET /api/organizations/{orgId}/usage` を `requestJson()`（`net.request`＋セッションCookie＋`Referer`、60秒キャッシュ）で叩き `{five_hour,seven_day}.utilization`(0..100) を `UsageLimits`(`source:'official'`) に変換。その他の `utilization` を持つキーは `extras: LabeledLimit[]` として `labelFor()` で自動収集。**失敗した段階は `console.warn('[official] …')` で常時出力**（`npm run dev:debug` = `CUW_DEBUG=1` で本文・成功値も出す）。失敗時 null→ローカルへ。`CUW_USAGE_ORIGIN` で origin 上書き可 |
-| `src/main/usage/watcher.ts` | `UsageWatcher`。監視＋ポーリング＋デバウンス、`tick()`/`emitCurrent()`/`buildAndEmit()`（`useOfficialUsage`時に limits を公式で上書き、取得失敗ならローカルのまま）/`stop()` |
+| `src/main/usage/watcher.ts` | `UsageWatcher`。監視＋ポーリング＋デバウンス、`tick()`/`emitCurrent()`/`buildAndEmit()`（`useOfficialUsage`時に公式で 5h/週間を上書きしつつ **`mergeExtras()` でローカルの週(Fable)等 extras を残す**、取得失敗ならローカルのまま）/`stop()` |
 | `src/main/usage/collect-cli.ts` | `npm run collect` 用。集計結果を標準出力（Electron 不要の検証手段。**常にローカル推定のみ**——officialUsage は Electron 依存のためCLIでは呼ばない） |
 | `src/preload/index.ts` | `contextBridge.exposeInMainWorld('widget', api)`。`onUsage/getSettings/setSettings/refresh/loginClaude/quit` |
 | `src/preload/index.d.ts` | renderer 用に `window.widget` 型を宣言 |
 | `src/renderer/App.tsx` | 購読・設定取得・ターミナル風ヘッダ・設定オーバーレイ・ステータスバー・パネル組み立て |
-| `src/renderer/components/*` | `LimitPanel`（5h/週間+`extras`のゲージ列＋未ログイン時のログイン促しボタン）/`TokenPanel`/`CostPanel`/`Clawd`（自作SVGマスコット、コーラル単色） |
+| `src/renderer/components/*` | `LimitPanel`（5h/週間+`extras`のゲージ列＋未ログイン時のログイン促しボタン）/`TokenPanel`/`CostPanel`/`DailyChart`（直近7日の日毎トークン棒グラフ・単一系列コーラル）/`Clawd`（自作SVGマスコット、コーラル単色） |
 | `src/renderer/format.ts` | `fmtTokens`(5.1M形式)/`fmtUSD`/`shortModel`(fable対応済)/`fmtResetTime`（同日ならHH:MM、別日ならM/D HH:MM） |
 | `src/shared/types.ts` | `UsageSnapshot`/`WindowAggregate`/`ModelTokens`/`PlanLimit`/`LabeledLimit`/`UsageLimits`(`extras?`)/`WidgetSettings`/`DEFAULT_SETTINGS`（`useOfficialUsage: true`） |
 | `src/shared/ipc.ts` | IPC チャンネル名定数 `IPC`（`claudeLogin` 追加） |
@@ -129,9 +129,11 @@ UsageSnapshot {
   generatedAt: string            // ISO
   today / last5h / last7d: WindowAggregate
   limits: UsageLimits
+  daily: DailyUsage[]            // 直近7日の日毎トークン（古い順・常に7要素・0の日も含む）
   sessionCount: number           // 今日の distinct セッション数
   status: string | null          // 異常時メッセージ（正常は null）
 }
+DailyUsage { date: 'YYYY-MM-DD'(ローカル日); tokens: number }
 WindowAggregate {
   byModel: Record<modelId, ModelTokens>
   totalTokens: number            // input+output+cache 全種別
@@ -151,8 +153,9 @@ UsageLimits {
 WidgetSettings {
   fiveHourBaselineTokens,        // 既定 85_000_000（ローカル推定モード時のみ使用）
   weeklyBaselineTokens,          // 既定 430_000_000（同上）
-  fableWeeklyBaselineTokens,     // 既定 150_000_000（週(Fable)ゲージの分母。ローカル推定時のみ）
-  showCost, alwaysOnTop,
+  fableWeeklyBaselineTokens,     // 既定 150_000_000（週(Fable)ゲージの分母。ローカル集計なので常に使用）
+  showCost, showFableWeekly, showChart,  // 各パネルの表示切替（既定 true）
+  alwaysOnTop,
   launchAtLogin,                 // 既定 true（自動起動デフォルトON。ただし dev では常にOFF——§10）
   useOfficialUsage               // 既定 true（v0.3.0でクラウード既定化）
 }
@@ -218,7 +221,7 @@ renderer からは `window.widget.*`（preload）経由でのみアクセス。`
 3. **libuv の 8.3 短縮名クラッシュ**: `os.tmpdir()`（例 `C:\Users\RYOTAK~1\...`）配下を `fs.watch`/chokidar で監視すると libuv が `fs-event.c` でアサート失敗してクラッシュする。テストはロングパス配下で行う。実運用の `~/.claude` はロングパスなので影響なし。
 4. **chokidar の `ready` 待ち**: `start()` 直後の追記を取りこぼさないよう `'ready'` を待つ（2秒フォールバック付き）。
 5. **オフセットは非永続（メモリのみ）**: 起動毎に全ファイルをフルスキャンしてレコードを再構築する設計。時間ウィンドウ集計には7日分のレコードが要るため、オフセットだけ永続しても末尾からでは履歴を復元できない。フルスキャンは実測で数十ms（§12）なので許容。→ 計画当初の `~/.claude/.usage-widget-cache.json` 永続化は**未採用**。巨大化した場合の最適化は §11。
-6. **`transparent: true` + Windows**: `backgroundColor:'#00000000'`、`hasShadow:false`、`ready-to-show` で表示。`resizable:false`（ユーザーのドラッグリサイズは無効）だが、**main プロセスが `applyWindowHeight()` で `setSize()` を呼び内容量に応じて高さを自動調整**する（コスト表示ON/OFF・公式extrasの数で変動）。renderer 側は高さを一切制御しない。
+6. **`transparent: true` + Windows／リサイズ**: `backgroundColor:'#00000000'`、`hasShadow:false`、`ready-to-show` で表示。**v0.3.1で `resizable:true` に変更**（ユーザーが端ドラッグでリサイズ可、位置＋サイズを永続化）。内容がウィンドウより高い場合は `.body` が縦スクロール（`overflow-y:auto`）。設定オーバーレイは `.widget` 直下（`position:absolute; inset:0`）に置き、body のスクロールと干渉しないようにしている。※以前あった main 側の高さ自動調整（`applyWindowHeight`）は手動リサイズと競合するため撤去した。
 7. **`window-all-closed` で終了しない**: トレイ常駐が仕様。終了はトレイ「終了」または `app:quit`。
 8. **【v0.3.0で発見・修正】dev実行でOSログイン時にElectronデモが起動するバグ**: `app.setLoginItemSettings({openAtLogin:true})` を dev/prod 問わず無条件に呼んでいたため、dev 実行時の `process.execPath`（素の `node_modules/electron/dist/electron.exe`）がそのまま Windows のスタートアップに登録されていた。次回 OS ログイン時、素の Electron バイナリが引数なしで起動 → **Electron 公式デモ（welcome画面）が表示される**。修正: `applyLoginItem(enabled)` ヘルパで `app.isPackaged` をチェックし、**dev では常に `openAtLogin:false` を送って stale 登録を能動的に掃除**する。3箇所あった直接呼び出し（起動時初期化・トレイトグル・IPC設定変更）を全てこのヘルパ経由に統一した。**既存の stale なスタートアップ登録は、修正後に一度 `npm run dev` を実行するまで残る**（コード修正だけでは自動的に消えない）。手動で消す場合はタスクマネージャ→スタートアップ→"Electron" を無効化。
 9. **`useOfficialUsage` 既定ONの影響**: 初回起動時、未ログインなら claude.ai へのネットワーク呼び出しは行われない（`getOrgId()` が Cookie 無しで即 `null` を返し `fetchOfficialLimits` が早期リターンするため）。つまり「オフライン完結」という当初の前提は**既定では成立しなくなった**——ログイン後は claude.ai への定期通信が発生する（60秒キャッシュで頻度は抑制）。完全ローカル運用に戻したいユーザーは設定で `useOfficialUsage` をOFFにできる。

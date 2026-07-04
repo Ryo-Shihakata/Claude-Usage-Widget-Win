@@ -3,6 +3,7 @@ import { join } from 'path'
 import { promises as fs } from 'fs'
 import {
   emptyAggregate,
+  type DailyUsage,
   type LabeledLimit,
   type ModelTokens,
   type PlanLimit,
@@ -216,20 +217,40 @@ export class UsageCollector {
       weekly: buildLimit(last7d.totalTokens, settings.weeklyBaselineTokens, last7dRecs, 7 * DAY)
     }
 
-    // Fable/Mythos 専用の週間枠（ローカル推定）。Fable 使用があるときだけ追加。
-    const fableRecs = last7dRecs.filter((r) => /fable|mythos/i.test(r.model))
-    if (fableRecs.length > 0) {
-      const fableTokens = fableRecs.reduce(
-        (s, r) => s + r.input + r.output + r.cacheCreate + r.cacheRead,
-        0
-      )
-      const extras: LabeledLimit[] = [
-        {
-          label: '週(Fable)',
-          limit: buildLimit(fableTokens, settings.fableWeeklyBaselineTokens, fableRecs, 7 * DAY)
+    // Fable/Mythos 専用の週間枠（ローカル推定）。設定ONかつ Fable 使用があるときだけ追加。
+    if (settings.showFableWeekly) {
+      const fableRecs = last7dRecs.filter((r) => /fable|mythos/i.test(r.model))
+      if (fableRecs.length > 0) {
+        const fableTokens = fableRecs.reduce(
+          (s, r) => s + r.input + r.output + r.cacheCreate + r.cacheRead,
+          0
+        )
+        const extras: LabeledLimit[] = [
+          {
+            label: '週(Fable)',
+            limit: buildLimit(fableTokens, settings.fableWeeklyBaselineTokens, fableRecs, 7 * DAY)
+          }
+        ]
+        limits.extras = extras
+      }
+    }
+
+    // 直近7日の日毎トークン（ローカル日境界で集計、常に7要素・使用0の日も含む）
+    const daily: DailyUsage[] = []
+    for (let i = 6; i >= 0; i--) {
+      const dayStart = todayStart - i * DAY
+      const dayEnd = dayStart + DAY
+      let tokens = 0
+      for (const r of this.records) {
+        if (r.ts >= dayStart && r.ts < dayEnd) {
+          tokens += r.input + r.output + r.cacheCreate + r.cacheRead
         }
-      ]
-      limits.extras = extras
+      }
+      const d = new Date(dayStart)
+      const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+        d.getDate()
+      ).padStart(2, '0')}`
+      daily.push({ date, tokens })
     }
 
     return {
@@ -238,6 +259,7 @@ export class UsageCollector {
       last5h,
       last7d,
       limits,
+      daily,
       sessionCount: sessions.size,
       status: found ? null : 'Claude Code のデータが見つかりません'
     }
