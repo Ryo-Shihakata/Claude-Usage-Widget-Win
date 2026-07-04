@@ -106,7 +106,7 @@ shared/  …… main・renderer 双方が import する型(types.ts)と IPC チ�
 | `src/main/window.ts` | `createWidgetWindow()`。`frame:false, transparent:true, alwaysOnTop, skipTaskbar, resizable:false`（初期 316px、以後 main が `setSize` で調整）。`moved` で位置保存。dev は `ELECTRON_RENDERER_URL`、prod は `loadFile` |
 | `src/main/store.ts` | `JsonStore<T>`。userData 配下の JSON を読み書き。壊れていればデフォルト |
 | `src/main/trayIcon.ts` | `renderTrayIcon(fraction)`。リングゲージ PNG を zlib で生成（トレイの常時表示用） |
-| `src/main/usage/collector.ts` | **ローカル推定（フォールバック）の中核**。`UsageCollector`。`refresh()`/`buildSnapshot()`/`readNewLines()`/`parseLine()`/`prune()`。`buildLimit()` は `source:'local'`。`defaultClaudeDir()` |
+| `src/main/usage/collector.ts` | **ローカル推定（フォールバック）の中核**。`UsageCollector`。`refresh()`/`buildSnapshot()`/`readNewLines()`/`parseLine()`/`prune()`。`buildLimit()` は `source:'local'`。`buildSnapshot` は 5h/週間に加え、**7日間に Fable/Mythos の使用があれば `limits.extras` に「週(Fable)」ゲージ**を追加。`defaultClaudeDir()` |
 | `src/main/usage/pricing.ts` | `RATES` テーブル（Opus/Sonnet/Haiku/**Fable/Mythos**）＋`resolveRate()`（族名フォールバック、`fable`/`mythos`含む）＋`estimateCost()` |
 | `src/main/usage/officialUsage.ts` | **公式取得（既定）**。`openClaudeLogin()`（永続パーティション `persist:claudeai` で claude.ai ログイン窓。閉じたら `clearOfficialCache()`）/`isClaudeLoggedIn()`/`fetchOfficialLimits()`。フロー: ①`hasSessionCookie()`（`sessionKey` 有無）で未ログインなら通信せず null → ②`getOrgId()`：**Cookie候補名（`lastActiveOrgId`/`lastActiveOrg`/…）を試し、無ければ `GET /api/organizations` の `[0].uuid` を使う**（Cookie名がclaude.ai側で変わっても動くようAPIフォールバックが本命）→ ③`GET /api/organizations/{orgId}/usage` を `requestJson()`（`net.request`＋セッションCookie＋`Referer`、60秒キャッシュ）で叩き `{five_hour,seven_day}.utilization`(0..100) を `UsageLimits`(`source:'official'`) に変換。その他の `utilization` を持つキーは `extras: LabeledLimit[]` として `labelFor()` で自動収集。**失敗した段階は `console.warn('[official] …')` で常時出力**（`npm run dev:debug` = `CUW_DEBUG=1` で本文・成功値も出す）。失敗時 null→ローカルへ。`CUW_USAGE_ORIGIN` で origin 上書き可 |
 | `src/main/usage/watcher.ts` | `UsageWatcher`。監視＋ポーリング＋デバウンス、`tick()`/`emitCurrent()`/`buildAndEmit()`（`useOfficialUsage`時に limits を公式で上書き、取得失敗ならローカルのまま）/`stop()` |
@@ -151,6 +151,7 @@ UsageLimits {
 WidgetSettings {
   fiveHourBaselineTokens,        // 既定 85_000_000（ローカル推定モード時のみ使用）
   weeklyBaselineTokens,          // 既定 430_000_000（同上）
+  fableWeeklyBaselineTokens,     // 既定 150_000_000（週(Fable)ゲージの分母。ローカル推定時のみ）
   showCost, alwaysOnTop,
   launchAtLogin,                 // 既定 true（自動起動デフォルトON。ただし dev では常にOFF——§10）
   useOfficialUsage               // 既定 true（v0.3.0でクラウード既定化）

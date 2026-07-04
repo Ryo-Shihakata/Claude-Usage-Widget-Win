@@ -3,8 +3,10 @@ import { join } from 'path'
 import { promises as fs } from 'fs'
 import {
   emptyAggregate,
+  type LabeledLimit,
   type ModelTokens,
   type PlanLimit,
+  type UsageLimits,
   type UsageSnapshot,
   type WidgetSettings,
   type WindowAggregate
@@ -204,25 +206,38 @@ export class UsageCollector {
     const last5h = this.aggregate(last5hRecs)
     const last7d = this.aggregate(last7dRecs)
 
+    const limits: UsageLimits = {
+      fiveHour: buildLimit(
+        last5h.totalTokens,
+        settings.fiveHourBaselineTokens,
+        last5hRecs,
+        FIVE_HOURS
+      ),
+      weekly: buildLimit(last7d.totalTokens, settings.weeklyBaselineTokens, last7dRecs, 7 * DAY)
+    }
+
+    // Fable/Mythos 専用の週間枠（ローカル推定）。Fable 使用があるときだけ追加。
+    const fableRecs = last7dRecs.filter((r) => /fable|mythos/i.test(r.model))
+    if (fableRecs.length > 0) {
+      const fableTokens = fableRecs.reduce(
+        (s, r) => s + r.input + r.output + r.cacheCreate + r.cacheRead,
+        0
+      )
+      const extras: LabeledLimit[] = [
+        {
+          label: '週(Fable)',
+          limit: buildLimit(fableTokens, settings.fableWeeklyBaselineTokens, fableRecs, 7 * DAY)
+        }
+      ]
+      limits.extras = extras
+    }
+
     return {
       generatedAt: new Date(now).toISOString(),
       today: this.aggregate(todayRecs),
       last5h,
       last7d,
-      limits: {
-        fiveHour: buildLimit(
-          last5h.totalTokens,
-          settings.fiveHourBaselineTokens,
-          last5hRecs,
-          FIVE_HOURS
-        ),
-        weekly: buildLimit(
-          last7d.totalTokens,
-          settings.weeklyBaselineTokens,
-          last7dRecs,
-          7 * DAY
-        )
-      },
+      limits,
       sessionCount: sessions.size,
       status: found ? null : 'Claude Code のデータが見つかりません'
     }

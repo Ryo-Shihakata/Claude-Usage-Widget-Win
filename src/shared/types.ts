@@ -75,6 +75,8 @@ export interface WidgetSettings {
   fiveHourBaselineTokens: number
   /** 週間枠ゲージの基準トークン数（分母） */
   weeklyBaselineTokens: number
+  /** Fable/Mythos 専用の週間枠ゲージの基準トークン数（ローカル推定時のみ使用） */
+  fableWeeklyBaselineTokens: number
   /** コストパネルを表示するか */
   showCost: boolean
   /** 常に最前面 */
@@ -92,6 +94,7 @@ export interface WidgetSettings {
 export const DEFAULT_SETTINGS: WidgetSettings = {
   fiveHourBaselineTokens: 85_000_000,
   weeklyBaselineTokens: 430_000_000,
+  fableWeeklyBaselineTokens: 150_000_000,
   showCost: true,
   alwaysOnTop: true,
   launchAtLogin: true,

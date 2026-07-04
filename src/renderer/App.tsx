@@ -32,6 +32,7 @@ export function App(): JSX.Element {
 
   const fiveHM = settings ? Math.round(settings.fiveHourBaselineTokens / 1e6) : 85
   const weeklyM = settings ? Math.round(settings.weeklyBaselineTokens / 1e6) : 430
+  const fableM = settings ? Math.round(settings.fableWeeklyBaselineTokens / 1e6) : 150
   const official =
     !!snap &&
     (snap.limits.fiveHour.source === 'official' || snap.limits.weekly.source === 'official')
@@ -103,6 +104,19 @@ export function App(): JSX.Element {
                   onChange={(e) =>
                     void updateSettings({
                       weeklyBaselineTokens: Math.max(1, Number(e.target.value)) * 1e6
+                    })
+                  }
+                />
+              </label>
+              <label className="setting-row">
+                <span>週(Fable) 基準 (Mtok)</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={fableM}
+                  onChange={(e) =>
+                    void updateSettings({
+                      fableWeeklyBaselineTokens: Math.max(1, Number(e.target.value)) * 1e6
                     })
                   }
                 />

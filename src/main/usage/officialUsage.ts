@@ -195,16 +195,20 @@ function toLimit(w: any): PlanLimit | null {
 /** 追加枠のキー名を日本語ラベルへ（未知キーは整形して表示） */
 function labelFor(key: string): string {
   const known: Record<string, string> = {
-    seven_day_opus: '週(Opus)',
-    seven_day_oauth_apps: '週(アプリ)',
-    five_hour_opus: '5時間(Opus)'
+    seven_day_oauth_apps: '週(アプリ)'
   }
   if (known[key]) return known[key]
+  // 一般化: <window>_<model> → 「<窓>(<Model>)」（例: seven_day_opus→週(Opus), seven_day_fable→週(Fable)）
+  const win = key.includes('seven_day') ? '週' : key.includes('five_hour') ? '5時間' : ''
+  const model = key.match(/(fable|mythos|opus|sonnet|haiku)/i)?.[1]
+  if (win && model) {
+    const m = model.charAt(0).toUpperCase() + model.slice(1).toLowerCase()
+    return `${win}(${m})`
+  }
   return key
     .replace(/seven_day/g, '週')
     .replace(/five_hour/g, '5時間')
     .replace(/_/g, ' ')
-    .replace(/opus/gi, 'Opus')
     .trim()
 }
 
