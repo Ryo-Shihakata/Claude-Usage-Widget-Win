@@ -5,13 +5,23 @@ function level(fraction: number): 'ok' | 'warn' | 'danger' {
   return fraction >= 0.9 ? 'danger' : fraction >= 0.7 ? 'warn' : 'ok'
 }
 
-function Gauge({ label, plan }: { label: string; plan: PlanLimit }): JSX.Element {
+function Gauge({
+  label,
+  plan,
+  markLocalEstimate
+}: {
+  label: string
+  plan: PlanLimit
+  /** true のとき、plan.source==='local' なゲージのラベルに「（推定）」を付ける（パネル全体が公式表示のとき用） */
+  markLocalEstimate?: boolean
+}): JSX.Element {
   const pct = Math.round(plan.fraction * 100)
   const lv = level(plan.fraction)
+  const displayLabel = markLocalEstimate && plan.source === 'local' ? `${label}（推定）` : label
   return (
     <div className="gauge-row">
       <div className="gauge-line">
-        <span className="gauge-label">{label}</span>
+        <span className="gauge-label">{displayLabel}</span>
         <span className={`gauge-pct ${lv}`}>{pct}%</span>
       </div>
       <div className="gauge">
@@ -47,10 +57,10 @@ export function LimitPanel({
         <span className="panel-label">利用枠</span>
         <span className="panel-sub">{official ? '☁ 公式 /usage' : '⌂ 推定（ローカル）'}</span>
       </div>
-      <Gauge label="5時間" plan={limits.fiveHour} />
-      <Gauge label="1週間" plan={limits.weekly} />
+      <Gauge label="5時間" plan={limits.fiveHour} markLocalEstimate={official} />
+      <Gauge label="1週間" plan={limits.weekly} markLocalEstimate={official} />
       {limits.extras?.map((e) => (
-        <Gauge key={e.label} label={e.label} plan={e.limit} />
+        <Gauge key={e.label} label={e.label} plan={e.limit} markLocalEstimate={official} />
       ))}
       {needsLogin && (
         <button className="login-hint no-drag" onClick={onLogin}>
