@@ -28,8 +28,18 @@ if (!app) {
   process.exit(1)
 }
 
+// dev とインストール版で userData を分離する。分離しないと同じ lockfile・キャッシュを
+// 奪い合い、インストール版が常駐している間は dev が単一インスタンスロックを取れず
+// 「Unable to move the cache: アクセスが拒否されました」を出した後、無言で終了する。
+if (!app.isPackaged) {
+  app.setPath('userData', join(app.getPath('userData'), '..', 'claude-usage-widget-dev'))
+}
+
 // 単一インスタンスに限定
 if (!app.requestSingleInstanceLock()) {
+  console.error(
+    '[claude-usage-widget] 既に同じインスタンスが起動しているため終了します（トレイを確認してください）。'
+  )
   app.quit()
 }
 
