@@ -275,6 +275,12 @@ body {
   color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
+.cost-tokens {
+  font-size: 9.5px;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  margin-top: 1px;
+}
 .cost-cap {
   font-size: 9px;
   color: var(--fg-dim);
