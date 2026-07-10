@@ -108,13 +108,13 @@ shared/  …… main・renderer 双方が import する型(types.ts)と IPC チ�
 | `src/main/trayIcon.ts` | `renderTrayIcon(fraction)`。リングゲージ PNG を zlib で生成（トレイの常時表示用） |
 | `src/main/usage/collector.ts` | **ローカル推定（フォールバック）の中核**。`UsageCollector`。`refresh()`/`buildSnapshot()`/`readNewLines()`/`parseLine()`/`prune()`。`buildLimit()` は `source:'local'`。`buildSnapshot` は 5h/週間に加え、**7日間に Fable/Mythos の使用があれば `limits.extras` に「週(Fable)」ゲージ**を追加。`defaultClaudeDir()` |
 | `src/main/usage/pricing.ts` | `RATES` テーブル（Opus/Sonnet/Haiku/**Fable/Mythos**）＋`resolveRate()`（族名フォールバック、`fable`/`mythos`含む）＋`estimateCost()` |
-| `src/main/usage/officialUsage.ts` | **公式取得（既定）**。`openClaudeLogin()`（永続パーティション `persist:claudeai` で claude.ai ログイン窓。閉じたら `clearOfficialCache()`）/`isClaudeLoggedIn()`/`fetchOfficialLimits()`。フロー: ①`hasSessionCookie()`（`sessionKey` 有無）で未ログインなら通信せず null → ②`getOrgId()`：**Cookie候補名（`lastActiveOrgId`/`lastActiveOrg`/…）を試し、無ければ `GET /api/organizations` の `[0].uuid` を使う**（Cookie名がclaude.ai側で変わっても動くようAPIフォールバックが本命）→ ③`GET /api/organizations/{orgId}/usage` を `requestJson()`（`net.request`＋セッションCookie＋`Referer`、60秒キャッシュ）で叩き `{five_hour,seven_day}.utilization`(0..100) を `UsageLimits`(`source:'official'`) に変換。その他の `utilization` を持つキーは `extras: LabeledLimit[]` として `labelFor()` で自動収集。**失敗した段階は `console.warn('[official] …')` で常時出力**（`npm run dev:debug` = `CUW_DEBUG=1` で本文・成功値も出す）。失敗時 null→ローカルへ。`CUW_USAGE_ORIGIN` で origin 上書き可 |
-| `src/main/usage/watcher.ts` | `UsageWatcher`。監視＋ポーリング＋デバウンス、`tick()`/`emitCurrent()`/`buildAndEmit()`（`useOfficialUsage`時に公式で 5h/週間を上書きしつつ **`mergeExtras()` でローカルの週(Fable)等 extras を残す**、取得失敗ならローカルのまま）/`stop()` |
+| `src/main/usage/officialUsage.ts` | **公式取得（既定）**。`openClaudeLogin()`（永続パーティション `persist:claudeai` で claude.ai ログイン窓。閉じたら `clearOfficialCache()`）/`isClaudeLoggedIn()`/`fetchOfficialLimits()`。フロー: ①`hasSessionCookie()`（`sessionKey` 有無）で未ログインなら通信せず null → ②`getOrgId()`：**Cookie候補名（`lastActiveOrgId`/`lastActiveOrg`/…）を試し、無ければ `GET /api/organizations` の `[0].uuid` を使う**（Cookie名がclaude.ai側で変わっても動くようAPIフォールバックが本命）→ ③`GET /api/organizations/{orgId}/usage` を `requestJson()`（`net.request`＋セッションCookie＋`Referer`、60秒キャッシュ）で叩き `{five_hour,seven_day}.utilization`(0..100) を `UsageLimits`(`source:'official'`) に変換。その他の `utilization` を持つキーは `mapUsage()`（export済み）内 `walkForExtras()` が**深さ2まで再帰的**に走査し `extras: LabeledLimit[]` として `labelFor()` で自動収集（フラット・ネストオブジェクト・配列のいずれにも対応。詳細は§6）。**失敗した段階は `console.warn('[official] …')` で常時出力**（`npm run dev:debug` = `CUW_DEBUG=1` で本文・成功値も出す。トップレベルキー一覧と収集した extras ラベル一覧も dbg 出力）。失敗時 null→ローカルへ。`CUW_USAGE_ORIGIN` で origin 上書き可 |
+| `src/main/usage/watcher.ts` | `UsageWatcher`。監視＋ポーリング＋デバウンス、`tick()`/`emitCurrent()`/`buildAndEmit()`（`useOfficialUsage`時に公式で 5h/週間を上書きしつつ **`mergeExtras()` でローカルの週(Fable)等 extras を残す**、取得失敗ならローカルのまま。merge後、**`showFableWeekly:false` なら公式由来も含めて `/fable\|mythos/i` にマッチする extras を除外**——ローカル collector は生成時点でこの設定を見るが、公式 extras は素通しされるため merge 後に一律フィルタする）/`stop()` |
 | `src/main/usage/collect-cli.ts` | `npm run collect` 用。集計結果を標準出力（Electron 不要の検証手段。**常にローカル推定のみ**——officialUsage は Electron 依存のためCLIでは呼ばない） |
 | `src/preload/index.ts` | `contextBridge.exposeInMainWorld('widget', api)`。`onUsage/getSettings/setSettings/refresh/loginClaude/quit` |
 | `src/preload/index.d.ts` | renderer 用に `window.widget` 型を宣言 |
 | `src/renderer/App.tsx` | 購読・設定取得・ターミナル風ヘッダ・設定オーバーレイ・ステータスバー・パネル組み立て |
-| `src/renderer/components/*` | `LimitPanel`（5h/週間+`extras`のゲージ列＋未ログイン時のログイン促しボタン）/`TokenPanel`/`CostPanel`/`DailyChart`（直近7日の日毎トークン棒グラフ・単一系列コーラル）/`Clawd`（自作SVGマスコット、コーラル単色） |
+| `src/renderer/components/*` | `LimitPanel`（5h/週間+`extras`のゲージ列＋未ログイン時のログイン促しボタン。パネルヘッダが「☁ 公式 /usage」（`official===true`）のとき、`Gauge` に `markLocalEstimate` を渡し `plan.source==='local'` なゲージのラベルへ「（推定）」を付与——公式値が来ない週(Fable)等をローカル推定と分かるように表示。公式由来の Fable extra が来ればサフィックスなし）/`TokenPanel`/`CostPanel`/`DailyChart`（直近7日の日毎トークン棒グラフ・単一系列コーラル）/`Clawd`（自作SVGマスコット、コーラル単色） |
 | `src/renderer/format.ts` | `fmtTokens`(5.1M形式)/`fmtUSD`/`shortModel`(fable対応済)/`fmtResetTime`（同日ならHH:MM、別日ならM/D HH:MM） |
 | `src/shared/types.ts` | `UsageSnapshot`/`WindowAggregate`/`ModelTokens`/`PlanLimit`/`LabeledLimit`/`UsageLimits`(`extras?`)/`WidgetSettings`/`DEFAULT_SETTINGS`（`useOfficialUsage: true`） |
 | `src/shared/ipc.ts` | IPC チャンネル名定数 `IPC`（`claudeLogin` 追加） |
@@ -171,7 +171,7 @@ WidgetSettings {
 
 **公式取得（`officialUsage.mapUsage`、既定パス）**:
 - `five_hour`/`seven_day` の `utilization`(0..100) を `/100` して `fraction` に。`windowTokens`/`baselineTokens` は意味を持たず `0` 固定（UI は `source==='official'` なら「公式値」とだけ表示しトークン数は出さない）。
-- それ以外の `utilization` を持つキーは `extras` へ（未検証のレスポンス形状に対する防御的パース。§10参照）。
+- それ以外の `utilization` を持つキーは `extras` へ。走査は**深さ2まで再帰的**（`walkForExtras()`）: ①トップレベルキー自体が `utilization` leaf ならフラット形状としてそのまま採用（従来どおり、例 `seven_day_opus`）。②leaf でなければ1階層だけ descend し、そのオブジェクトの各プロパティ、または配列の各要素が `utilization` leaf かを見る（例 `model_limits.fable.utilization` や `[{model:'fable',utilization}]`）。キーパスは `_` 連結（例 `model_limits_fable`）して `labelFor()` に渡す。配列要素は `model`/`name`/`key` の文字列フィールドがあればキーパス末尾に使い、無ければ添字。leaf を見つけた時点でその配下へは descend しない（二重収集防止）。未検証のレスポンス形状に対する防御的パース（§10参照）。
 
 ---
 
@@ -230,7 +230,7 @@ renderer からは `window.widget.*`（preload）経由でのみアクセス。`
 
 ## 11. 拡張ポイント
 
-- **公式レスポンスの実形状確定**: `officialUsage.mapUsage()` の extras 抽出・`labelFor()` のキー名マップは推測ベース（§13参照）。実機で一度 `console.debug(JSON.stringify(data))` を入れてレスポンスを確認し、既知キーの表を正としてハードコードし直すとより頑健になる。
+- **公式レスポンスの実形状確定**: `officialUsage.mapUsage()` の extras 抽出は深さ2までの再帰走査（フラット/ネストオブジェクト/配列）でキー名不明への耐性は上げたが、`labelFor()` のキー名→日本語ラベル対応は依然推測ベース（§13参照）。実機で一度 `CUW_DEBUG=1` で dbg 出力（トップレベルキー一覧・extras ラベル一覧）を確認し、既知キーの表を正としてハードコードし直すとより頑健になる。
 - **完全ローカル運用の可視化**: `useOfficialUsage` をOFFにしたユーザー向けに、設定パネルへ「このモードでは通信しません」の一文を足すと安心材料になる。
 - **オフセット永続化**: 起動が重くなった場合、7日分のレコードを `userData` にキャッシュし、起動時はキャッシュ＋差分読みに切替（§10-5 の代替）。
 - **履歴グラフ**: `WindowAggregate` を日次で保持し、スパークラインを追加。

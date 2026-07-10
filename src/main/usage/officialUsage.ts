@@ -212,13 +212,59 @@ function labelFor(key: string): string {
     .trim()
 }
 
+/** `utilization`(number) を持つオブジェクトか判定 */
+function isUtilizationLeaf(v: unknown): v is Record<string, any> {
+  return !!v && typeof v === 'object' && typeof (v as any).utilization === 'number'
+}
+
+/** 配列要素のキーパス末尾セグメント。model/name/key の文字列フィールドがあればそれを使い、無ければ添字 */
+function arrayElementLabelSegment(el: Record<string, any>, index: number): string {
+  const v = el.model ?? el.name ?? el.key
+  return typeof v === 'string' && v ? v : String(index)
+}
+
 /**
- * レスポンスを UsageLimits に変換。five_hour/seven_day は必須、
+ * `utilization` を持つオブジェクトを再帰的に探索し extras 候補を集める。
+ * `depthLeft` は「現在のノードの子（またはその配列要素）を検査してよい残り階層数」。
+ * 呼び出し元で depthLeft=1 を渡すと、このノード自身の子を検査する（＝深さ2）のみ許可し、
+ * その子がさらに非leafでもそこから先（深さ3）へは descend しない。
+ * five_hour/seven_day 相当や、既に extras として拾ったオブジェクトの子は二重に探索しない
+ * （utilization leaf を見つけた時点でその配下へは descend しない）。
+ */
+function walkForExtras(node: unknown, path: string[], depthLeft: number, out: LabeledLimit[]): void {
+  if (!node || typeof node !== 'object') return
+  if (Array.isArray(node)) {
+    node.forEach((el, idx) => {
+      if (isUtilizationLeaf(el)) {
+        const lim = toLimit(el)
+        if (lim) out.push({ label: labelFor([...path, arrayElementLabelSegment(el, idx)].join('_')), limit: lim })
+        return
+      }
+      if (depthLeft > 1) walkForExtras(el, path, depthLeft - 1, out)
+    })
+    return
+  }
+  for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+    if (isUtilizationLeaf(v)) {
+      const lim = toLimit(v)
+      if (lim) out.push({ label: labelFor([...path, k].join('_')), limit: lim })
+      continue
+    }
+    if (depthLeft > 1) walkForExtras(v, [...path, k], depthLeft - 1, out)
+  }
+}
+
+/**
+ * レスポンスを UsageLimits に変換。five_hour/seven_day は必須トップレベル、
  * その他の `utilization` を持つキーは extras（例: 週(Opus)）として拾う。
+ * トップレベルキー自体が `utilization` を持つ従来のフラット形状（例: seven_day_opus）に加え、
+ * `{ model_limits: { fable: { utilization } } }` のようなネストや、
+ * `[{ model: 'fable', utilization, resets_at }]` のような配列も**深さ2まで**再帰的に探索する。
  * 実レスポンス形状は未検証のため防御的に処理する。
  */
-function mapUsage(data: any): UsageLimits | null {
+export function mapUsage(data: any): UsageLimits | null {
   if (!data || typeof data !== 'object') return null
+  dbg('response top-level keys:', Object.keys(data))
   const five = toLimit(data.five_hour)
   const week = toLimit(data.seven_day)
   if (!five || !week) return null
@@ -226,8 +272,18 @@ function mapUsage(data: any): UsageLimits | null {
   for (const [key, val] of Object.entries(data)) {
     if (key === 'five_hour' || key === 'seven_day') continue
     const lim = toLimit(val)
-    if (lim) extras.push({ label: labelFor(key), limit: lim })
+    if (lim) {
+      // フラット形状: このキー自体が utilization leaf → 子は探索しない
+      extras.push({ label: labelFor(key), limit: lim })
+      continue
+    }
+    // ネスト/配列形状: この階層(1)+1階層=深さ2まで utilization leaf を探索
+    walkForExtras(val, [key], 1, extras)
   }
+  dbg(
+    'extras collected:',
+    extras.map((e) => e.label)
+  )
   return { fiveHour: five, weekly: week, extras: extras.length ? extras : undefined }
 }
 

@@ -89,6 +89,13 @@ export class UsageWatcher {
         snap.limits = { ...official, extras: merged.length ? merged : undefined }
       }
     }
+    // showFableWeekly:false のときは、公式レスポンス由来の Fable/Mythos extras も含めて除外する
+    // （ローカル collector は既に showFableWeekly を見て生成をスキップしているが、公式 extras は
+    //  素通しされるためここでも一律フィルタする）
+    if (settings.showFableWeekly === false && snap.limits.extras?.length) {
+      const filtered = snap.limits.extras.filter((e) => !/fable|mythos/i.test(e.label))
+      snap.limits = { ...snap.limits, extras: filtered.length ? filtered : undefined }
+    }
     this.onSnapshot(snap)
   }
 
