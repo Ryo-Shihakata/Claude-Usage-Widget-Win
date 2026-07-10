@@ -6,10 +6,7 @@ import { JsonStore } from './store'
 import { UsageWatcher } from './usage/watcher'
 import { openClaudeLogin, isClaudeLoggedIn } from './usage/officialUsage'
 import { renderTrayIcon } from './trayIcon'
-import electronUpdater from 'electron-updater'
 import { IPC } from '../shared/ipc'
-
-const { autoUpdater } = electronUpdater
 import { DEFAULT_SETTINGS, type UsageSnapshot, type WidgetSettings } from '../shared/types'
 
 let win: BrowserWindow | null = null
@@ -20,6 +17,16 @@ let lastSnapshot: UsageSnapshot | null = null
 // app ready 後に初期化（userData パスは ready 後に確定するため）
 let settingsStore: JsonStore<WidgetSettings>
 let boundsStore: JsonStore<WindowBounds>
+
+// ELECTRON_RUN_AS_NODE 環境（Claude Code のシェル等）では Electron が素の Node として動き
+// app が取れない。意味不明な TypeError で落ちる前に理由を明示して終了する。
+if (!app) {
+  console.error(
+    '[claude-usage-widget] Electron の app API が取得できません。' +
+      'ELECTRON_RUN_AS_NODE が設定された環境では GUI を起動できません（通常のターミナルから npm run dev を実行してください）。'
+  )
+  process.exit(1)
+}
 
 // 単一インスタンスに限定
 if (!app.requestSingleInstanceLock()) {
@@ -169,8 +176,11 @@ function registerIpc(): void {
 }
 
 /** GitHub Releases からの自動アップデート（パッケージ版のみ）。 */
-function setupAutoUpdate(): void {
+async function setupAutoUpdate(): Promise<void> {
   if (!app.isPackaged) return // dev では無効（dev-app-update.yml が無く例外になるため）
+  // 遅延import: electron-updater は import した時点で app.getVersion() に触るため、
+  // トップレベルで読み込むと dev や ELECTRON_RUN_AS_NODE 環境で起動前にクラッシュする
+  const { autoUpdater } = (await import('electron-updater')).default
   autoUpdater.autoDownload = true
   autoUpdater.on('error', (e) => console.error('[autoUpdater]', e))
   const check = (): void => {
@@ -208,7 +218,7 @@ app.whenReady().then(async () => {
   )
   await watcher.start()
 
-  setupAutoUpdate()
+  void setupAutoUpdate().catch((e) => console.error('[autoUpdater] setup failed:', e))
 })
 
 app.on('second-instance', () => {

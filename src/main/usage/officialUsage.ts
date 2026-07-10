@@ -24,7 +24,8 @@ const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 
 // 診断ログ: 失敗は常に warn、詳細（本文・成功値）は CUW_DEBUG=1 のときだけ。
-const DEBUG = process.env.CUW_DEBUG === '1' || process.env.CUW_DEBUG === 'true'
+// trim(): cmd の `set VAR=1 && ...` 形式だと値に末尾スペースが入るため防御
+const DEBUG = ['1', 'true'].includes((process.env.CUW_DEBUG ?? '').trim())
 function dbg(...a: unknown[]): void {
   if (DEBUG) console.log('[official]', ...a)
 }
