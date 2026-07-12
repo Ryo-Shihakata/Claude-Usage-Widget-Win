@@ -41,13 +41,8 @@ export function App(): JSX.Element {
   return (
     <div className="widget">
       <header className="term-header drag">
-        <div className="term-dots">
-          <span />
-          <span />
-          <span />
-        </div>
         <span className="term-title">
-          clawd@usage<span className="cursor">▊</span>
+          claude@usage<span className="cursor">▊</span>
         </span>
         <div className="header-actions no-drag">
           <button className="icon-btn" title="今すぐ更新" onClick={() => void window.widget.refresh()}>

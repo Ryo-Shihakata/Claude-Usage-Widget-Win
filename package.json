@@ -1,6 +1,6 @@
 {
   "name": "claude-usage-widget",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Claude Code の使用量をデスクトップに常時表示するフローティングウィジェット",
   "main": "./out/main/index.js",
   "author": "Ryo-Shihakata",
@@ -11,7 +11,7 @@
   },
   "scripts": {
     "dev": "electron-vite dev",
-    "dev:debug": "set CUW_DEBUG=1 && electron-vite dev",
+    "dev:debug": "cross-env CUW_DEBUG=1 electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "collect": "tsx src/main/usage/collect-cli.ts",
@@ -24,6 +24,7 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "cross-env": "^10.1.0",
     "electron": "^33.2.0",
     "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",

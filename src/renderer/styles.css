@@ -62,25 +62,6 @@ body {
   background: var(--bg-chrome);
   border-bottom: 1px solid var(--border);
 }
-.term-dots {
-  display: flex;
-  gap: 5px;
-}
-.term-dots span {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  opacity: 0.85;
-}
-.term-dots span:nth-child(1) {
-  background: #d1584f;
-}
-.term-dots span:nth-child(2) {
-  background: #dba13d;
-}
-.term-dots span:nth-child(3) {
-  background: #57a55a;
-}
 .term-title {
   flex: 1;
   font-size: 10px;
@@ -274,6 +255,12 @@ body {
   font-weight: 700;
   color: var(--accent);
   font-variant-numeric: tabular-nums;
+}
+.cost-tokens {
+  font-size: 9.5px;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  margin-top: 1px;
 }
 .cost-cap {
   font-size: 9px;
