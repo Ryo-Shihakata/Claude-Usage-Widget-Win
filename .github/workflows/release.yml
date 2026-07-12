@@ -1,0 +1,27 @@
+# タグ `v*` の push で Windows 向けビルドを行い、GitHub Releases に下書きを作成する。
+# Linux/macOS からはローカルで NSIS の署名処理（wine 必須）ができないため、リリースは CI で行う。
+# 手順は RELEASING.md を参照。
+name: Release (Windows)
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
