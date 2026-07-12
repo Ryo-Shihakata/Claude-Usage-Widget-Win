@@ -30,9 +30,19 @@ npm run build
 ```
 
 ### 3. ビルドして GitHub にアップロード（下書きリリース作成）
+
+**推奨: GitHub Actions（どのOSからでも可）** — main にバージョンbump済みの状態でタグを push するだけ:
 ```bash
+git tag v{version} && git push origin v{version}
+```
+`.github/workflows/release.yml` が windows-latest 上でビルドし、下書きリリースへアップロードする（`gh run watch` で進捗確認）。
+
+**ローカルビルド（Windows マシンのみ）**:
+```bash
+# PowerShell: $env:GH_TOKEN = (gh auth token); npm run release
 GH_TOKEN=$(gh auth token) npm run release
 ```
+> Linux/macOS からのローカルビルドは NSIS の署名処理に wine が必要なため不可（CI を使うこと）。
 electron-builder が `release/` に成果物を作り、**下書きリリース**へアップロードする:
 - `Claude Usage Widget Setup {version}.exe` … NSIS インストーラ
 - `ClaudeUsageWidget-portable-{version}.exe` … ポータブル
