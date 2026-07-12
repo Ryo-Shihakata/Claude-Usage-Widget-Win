@@ -204,7 +204,7 @@ renderer からは `window.widget.*`（preload）経由でのみアクセス。`
 
 ## 9. UI（renderer）
 
-- `widget` ルートが半透明ダークカード（`styles.css` の CSS 変数で配色）。**3段構成**: `.term-header`（ターミナル風・信号ドット3つ＋`clawd@usage`＋点滅カーソル）→ `.body`（パネル群、`position:relative` で設定オーバーレイの土台）→ `.statusbar`（Clawdマスコット＋モード表示＋時刻）。
+- `widget` ルートが半透明ダークカード（`styles.css` の CSS 変数で配色）。**3段構成**: `.term-header`（ターミナル風・`claude@usage`＋点滅カーソル）→ `.body`（パネル群、`position:relative` で設定オーバーレイの土台）→ `.statusbar`（Clawdマスコット＋モード表示＋時刻）。
 - ヘッダに `-webkit-app-region: drag`、ボタン・設定オーバーレイ・ログインボタン等の操作要素には全て `no-drag`（付け忘れるとクリックがドラッグに吸われる）。
 - 設定パネルは `.settings-overlay`（`position:absolute; inset:0`）として **body の上に重ねる**。旧実装のようにパネル群の下に追加すると、開閉のたびにウィンドウ高さが変わってしまうため。
 - ゲージ色は `fraction` で `ok(<0.7)/warn(<0.9)/danger(>=0.9)`（`LimitPanel.tsx` の `level()`）。`extras` も同じ `Gauge` コンポーネントで描画。
@@ -276,7 +276,7 @@ npm run package
 npm run dev
 ```
 確認項目:
-- ターミナル風ヘッダ（信号ドット・`clawd@usage`・カーソル点滅）とステータスバー（Clawd・☁/⌂モード・時刻）が表示される。
+- ターミナル風ヘッダ（`claude@usage`・カーソル点滅）とステータスバー（Clawd・☁/⌂モード・時刻）が表示される。
 - 初回起動時、未ログインなら「⌂ 推定」表示＋パネル内ログインボタン。トレイ/設定の「claude.ai にログイン」からログインすると「☁ 公式」に切り替わり、公式レスポンスに追加枠があれば自動で追加ゲージが増える（ウィンドウ高さも自動で伸びる）。
 - 別ターミナルで Claude Code を1ターン動かし、数秒以内にトークン/コストが増えること。
 - ドラッグ移動・位置保存・トレイ操作・最前面トグル・自動起動トグル・設定オーバーレイの開閉（高さが変わらないこと）を確認。
