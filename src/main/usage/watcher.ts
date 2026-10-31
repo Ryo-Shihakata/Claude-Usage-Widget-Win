@@ -1,13 +1,18 @@
-import { join } from 'path'
 import chokidar, { type FSWatcher } from 'chokidar'
-import { UsageCollector, defaultClaudeDir } from './collector'
+import { UsageCollector } from './collector'
 import { fetchOfficialLimits } from './officialUsage'
 import type { LabeledLimit, UsageSnapshot, WidgetSettings } from '../../shared/types'
+import { isFableFamily } from '../../shared/usage'
 
 /** 公式extras（機種別週間枠）にローカルextras（週(Fable)等）を追記。同ラベルは公式優先。 */
 function mergeExtras(official: LabeledLimit[] = [], local: LabeledLimit[] = []): LabeledLimit[] {
   const seen = new Set(official.map((e) => e.label))
   return [...official, ...local.filter((e) => !seen.has(e.label))]
+}
+
+/** 空配列は undefined に正規化（UsageLimits.extras は「無し」を undefined で表す） */
+function nonEmpty<T>(a: T[]): T[] | undefined {
+  return a.length ? a : undefined
 }
 
 /**
@@ -29,8 +34,7 @@ export class UsageWatcher {
   async start(): Promise<void> {
     await this.tick() // 初回フルスキャン
 
-    const projects = join(defaultClaudeDir(), 'projects')
-    this.watcher = chokidar.watch(projects, {
+    this.watcher = chokidar.watch(this.collector.projectsDir, {
       ignoreInitial: true,
       depth: 2,
       awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 }
@@ -85,16 +89,17 @@ export class UsageWatcher {
       const official = await fetchOfficialLimits().catch(() => null)
       if (official) {
         // 公式の 5h/週間で上書きしつつ、ローカルの追加枠（週(Fable)等）は残す
-        const merged = mergeExtras(official.extras, snap.limits.extras)
-        snap.limits = { ...official, extras: merged.length ? merged : undefined }
+        snap.limits = { ...official, extras: nonEmpty(mergeExtras(official.extras, snap.limits.extras)) }
       }
     }
     // showFableWeekly:false のときは、公式レスポンス由来の Fable/Mythos extras も含めて除外する
     // （ローカル collector は既に showFableWeekly を見て生成をスキップしているが、公式 extras は
     //  素通しされるためここでも一律フィルタする）
-    if (settings.showFableWeekly === false && snap.limits.extras?.length) {
-      const filtered = snap.limits.extras.filter((e) => !/fable|mythos/i.test(e.label))
-      snap.limits = { ...snap.limits, extras: filtered.length ? filtered : undefined }
+    if (!settings.showFableWeekly && snap.limits.extras?.length) {
+      snap.limits = {
+        ...snap.limits,
+        extras: nonEmpty(snap.limits.extras.filter((e) => !isFableFamily(e.label)))
+      }
     }
     this.onSnapshot(snap)
   }

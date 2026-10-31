@@ -2,6 +2,7 @@
 // stats-cache.json の値と照合して集計の正しさを確認する。
 import { UsageCollector } from './collector'
 import { DEFAULT_SETTINGS } from '../../shared/types'
+import { sumTokens } from '../../shared/usage'
 
 async function main(): Promise<void> {
   const collector = new UsageCollector()
@@ -14,9 +15,8 @@ async function main(): Promise<void> {
   console.log(`データ検出: ${found}  / 走査時間: ${elapsed}ms`)
   console.log('--- 今日 ---')
   for (const [model, t] of Object.entries(snap.today.byModel)) {
-    const total = t.inputTokens + t.outputTokens + t.cacheCreationTokens + t.cacheReadTokens
     console.log(
-      `  ${model}: total ${fmt(total)} ` +
+      `  ${model}: total ${fmt(sumTokens(t))} ` +
         `(in ${fmt(t.inputTokens)} / out ${fmt(t.outputTokens)} / ` +
         `cacheW ${fmt(t.cacheCreationTokens)} / cacheR ${fmt(t.cacheReadTokens)})`
     )

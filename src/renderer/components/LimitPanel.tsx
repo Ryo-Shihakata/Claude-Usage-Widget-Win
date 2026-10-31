@@ -1,9 +1,6 @@
 import type { PlanLimit, UsageLimits } from '../../shared/types'
+import { isOfficialLimits, usageLevel } from '../../shared/usage'
 import { fmtTokens, fmtResetTime } from '../format'
-
-function level(fraction: number): 'ok' | 'warn' | 'danger' {
-  return fraction >= 0.9 ? 'danger' : fraction >= 0.7 ? 'warn' : 'ok'
-}
 
 function Gauge({
   label,
@@ -16,7 +13,7 @@ function Gauge({
   markLocalEstimate?: boolean
 }): JSX.Element {
   const pct = Math.round(plan.fraction * 100)
-  const lv = level(plan.fraction)
+  const lv = usageLevel(plan.fraction)
   const displayLabel = markLocalEstimate && plan.source === 'local' ? `${label}（推定）` : label
   return (
     <div className="gauge-row">
@@ -48,7 +45,7 @@ export function LimitPanel({
   officialRequested: boolean
   onLogin: () => void
 }): JSX.Element {
-  const official = limits.fiveHour.source === 'official' || limits.weekly.source === 'official'
+  const official = isOfficialLimits(limits)
   // クラウド希望なのに公式値が出ていない＝未ログイン（or 取得失敗）
   const needsLogin = officialRequested && !official
   return (

@@ -6,6 +6,8 @@ export const IPC = {
   settingsGet: 'settings:get',
   /** renderer→主: 設定を更新（差分） */
   settingsSet: 'settings:set',
+  /** 主→renderer: 設定が変わった（トレイからの変更も含む） */
+  settingsChanged: 'settings:changed',
   /** renderer→主: 即時再集計を要求 */
   refresh: 'usage:refresh',
   /** renderer→主: claude.ai ログインウィンドウを開く（公式 /usage 用） */
