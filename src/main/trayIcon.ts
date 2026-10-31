@@ -1,4 +1,5 @@
 import { deflateSync } from 'zlib'
+import { clamp01, usageLevel, type UsageLevel } from '../shared/usage'
 
 /**
  * トレイ用のリングゲージ・アイコンを PNG バッファで生成する。
@@ -7,10 +8,10 @@ import { deflateSync } from 'zlib'
  */
 const SIZE = 32
 
-function levelColor(fraction: number): [number, number, number] {
-  if (fraction >= 0.9) return [0xc8, 0x55, 0x3d] // danger
-  if (fraction >= 0.7) return [0xe0, 0xa2, 0x3d] // warn
-  return [0xd9, 0x77, 0x57] // coral
+const LEVEL_COLOR: Record<UsageLevel, [number, number, number]> = {
+  danger: [0xc8, 0x55, 0x3d],
+  warn: [0xe0, 0xa2, 0x3d],
+  ok: [0xd9, 0x77, 0x57] // coral
 }
 
 function crc32(buf: Buffer): number {
@@ -52,13 +53,13 @@ function encodePng(px: Buffer): Buffer {
 
 /** fraction に応じたリングゲージ PNG を返す */
 export function renderTrayIcon(fraction: number): Buffer {
-  const f = Math.max(0, Math.min(1, fraction))
+  const f = clamp01(fraction)
   const px = Buffer.alloc(SIZE * SIZE * 4)
   const cx = SIZE / 2
   const cy = SIZE / 2
   const outerR = SIZE * 0.46
   const innerR = SIZE * 0.28
-  const [r, g, b] = levelColor(f)
+  const [r, g, b] = LEVEL_COLOR[usageLevel(f)]
   const TAU = Math.PI * 2
   const filledAngle = f * TAU
 

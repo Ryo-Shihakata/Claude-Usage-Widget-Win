@@ -1,4 +1,5 @@
 import type { ModelTokens } from '../../shared/types'
+import { modelFamily, type ModelFamily } from '../../shared/usage'
 
 /**
  * モデル別の公開単価（USD / 100万トークン = MTok）。
@@ -24,15 +25,19 @@ const RATES: Record<string, ModelRate> = {
   'claude-haiku-4-5': { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 }
 }
 
-/** 完全一致が無い場合に族名から単価を推定（例: 将来の fable / opus / sonnet / haiku 派生） */
+/** 完全一致が無いときに使う族ごとの代表モデル（例: 将来の fable / opus / sonnet / haiku 派生） */
+const FAMILY_FALLBACK: Record<ModelFamily, string> = {
+  fable: 'claude-fable-5',
+  mythos: 'claude-fable-5',
+  opus: 'claude-opus-4-8',
+  sonnet: 'claude-sonnet-4-6',
+  haiku: 'claude-haiku-4-5'
+}
+
 function resolveRate(model: string): ModelRate | null {
   if (RATES[model]) return RATES[model]
-  const lower = model.toLowerCase()
-  if (lower.includes('fable') || lower.includes('mythos')) return RATES['claude-fable-5']
-  if (lower.includes('opus')) return RATES['claude-opus-4-8']
-  if (lower.includes('sonnet')) return RATES['claude-sonnet-4-6']
-  if (lower.includes('haiku')) return RATES['claude-haiku-4-5']
-  return null
+  const family = modelFamily(model)
+  return family ? RATES[FAMILY_FALLBACK[family]] : null
 }
 
 const PER_TOKEN = 1 / 1_000_000

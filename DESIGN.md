@@ -24,7 +24,7 @@ Claude Code の使用量をデスクトップに常時表示するフローテ�
 ```
 ┌──────────────────────────── Electron main (Node 権限) ────────────────────────────┐
 │  index.ts  …… ライフサイクル / BrowserWindow / Tray / IPC / applyLoginItem /        │
-│               applyWindowHeight（動的リサイズ）                                    │
+│               applySettingsPatch（設定変更の唯一の入口）                           │
 │     │                                                                              │
 │     ├─ window.ts ……… フレームレス・半透明・最前面ウィンドウ生成                    │
 │     ├─ store.ts  ……… settings.json / window-bounds.json の永続化(userData)         │
@@ -33,18 +33,21 @@ Claude Code の使用量をデスクトップに常時表示するフローテ�
 │          ├─ watcher.ts     … chokidar監視+30秒ポーリング → tick() → buildAndEmit    │
 │          ├─ collector.ts   … jsonl をインクリメンタル走査し集計（ローカル推定）     │
 │          ├─ officialUsage.ts … claude.ai セッションCookieで公式usage取得（既定）    │
+│          ├─ officialParse.ts … 公式レスポンス → UsageLimits（純粋関数）             │
+│          ├─ officialLog.ts   … [official] 診断ログ（CUW_DEBUG）                     │
 │          └─ pricing.ts     … モデル別単価 → コスト推定（Fable/Mythos含む）          │
-│                                  │ IPC: 'usage:update' (push)                       │
+│                       │ IPC: 'usage:update' / 'settings:changed' (push)             │
 │                                  ▼                                                  │
 │  preload/index.ts …… contextBridge で window.widget API を renderer に公開          │
 └────────────────────────────────────┼───────────────────────────────────────────────┘
                                       ▼
 ┌──────────────────────── renderer (Chromium / React) ─────────────────────────────┐
 │  App.tsx（ターミナル風ヘッダ＋設定オーバーレイ＋ステータスバー）                    │
-│    → LimitPanel（ゲージ+extras+ログイン促し） / TokenPanel / CostPanel / Clawd     │
+│    → LimitPanel / TokenPanel / DailyChart / CostPanel / SettingsPanel / Clawd      │
 └───────────────────────────────────────────────────────────────────────────────────┘
 
-shared/  …… main・renderer 双方が import する型(types.ts)と IPC チャンネル名(ipc.ts)
+shared/  …… main・renderer 双方が import する型(types.ts)・IPC チャンネル名(ipc.ts)・
+            純粋関数(usage.ts: sumTokens / usageLevel / modelFamily / isOfficialLimits 等)
 ```
 
 ビルドは **electron-vite**。`main` / `preload` / `renderer` の3ターゲットを `electron.vite.config.ts` で定義し、`out/` に出力。
@@ -102,22 +105,26 @@ shared/  …… main・renderer 双方が import する型(types.ts)と IPC チ�
 
 | ファイル | 責務 / 主要シンボル |
 | --- | --- |
-| `src/main/index.ts` | ライフサイクル、`buildTray`/`refreshTrayMenu`、`pushSnapshot`、`updateTrayIndicator`（リングゲージ+ツールチップ）、`applyLoginItem(enabled)`（**dev では常にOFF**——§10の新罠を参照）、`setupAutoUpdate`（electron-updater）、IPC、単一インスタンスロック、トレイ常駐 |
+| `src/main/index.ts` | ライフサイクル、`buildTray`/`refreshTrayMenu`（真偽値設定のチェックボックスは `settingCheckbox()` で生成）、**`applySettingsPatch(patch)`＝設定変更の唯一の入口**（保存→`applyAlwaysOnTop`/`applyLoginItem`/ログイン誘導→`tick()` or `emitCurrent()`→トレイ再構築→renderer へ `settings:changed`。IPC `settings:set` もトレイも必ずここを通す）、`pushSnapshot`、`updateTrayIndicator`（リングゲージ+ツールチップ）、`applyLoginItem(enabled)`（**dev では常にOFF**——§10の新罠を参照）、`setupAutoUpdate`（electron-updater）、IPC、単一インスタンスロック、トレイ常駐 |
 | `src/main/window.ts` | `createWidgetWindow()`。`frame:false, transparent:true, alwaysOnTop, skipTaskbar, **resizable:true**`（min 220×180、既定 280×430）。`moved`/`resize`(400msデバウンス) で `onBounds` により位置＋サイズを永続化。高さの自動調整はしない（内容が溢れたら `.body` が縦スクロール）。dev は `ELECTRON_RENDERER_URL`、prod は `loadFile` |
 | `src/main/store.ts` | `JsonStore<T>`。userData 配下の JSON を読み書き。壊れていればデフォルト |
 | `src/main/trayIcon.ts` | `renderTrayIcon(fraction)`。リングゲージ PNG を zlib で生成（トレイの常時表示用） |
-| `src/main/usage/collector.ts` | **ローカル推定（フォールバック）の中核**。`UsageCollector`。`refresh()`/`buildSnapshot()`/`readNewLines()`/`parseLine()`/`prune()`。`buildLimit()` は `source:'local'`。`buildSnapshot` は 5h/週間に加え、**7日間に Fable/Mythos の使用があれば `limits.extras` に「週(Fable)」ゲージ**を追加。`defaultClaudeDir()` |
-| `src/main/usage/pricing.ts` | `RATES` テーブル（Opus/Sonnet/Haiku/**Fable/Mythos**）＋`resolveRate()`（族名フォールバック、`fable`/`mythos`含む）＋`estimateCost()` |
-| `src/main/usage/officialUsage.ts` | **公式取得（既定）**。`openClaudeLogin()`（永続パーティション `persist:claudeai` で claude.ai ログイン窓。閉じたら `clearOfficialCache()`）/`isClaudeLoggedIn()`/`fetchOfficialLimits()`。フロー: ①`hasSessionCookie()`（`sessionKey` 有無）で未ログインなら通信せず null → ②`getOrgId()`：**Cookie候補名（`lastActiveOrgId`/`lastActiveOrg`/…）を試し、無ければ `GET /api/organizations` の `[0].uuid` を使う**（Cookie名がclaude.ai側で変わっても動くようAPIフォールバックが本命）→ ③`GET /api/organizations/{orgId}/usage` を `requestJson()`（`net.request`＋セッションCookie＋`Referer`、60秒キャッシュ）で叩き `{five_hour,seven_day}.utilization`(0..100) を `UsageLimits`(`source:'official'`) に変換。その他の `utilization` を持つキーは `mapUsage()`（export済み）内 `walkForExtras()` が**深さ2まで再帰的**に走査し `extras: LabeledLimit[]` として `labelFor()` で自動収集（フラット・ネストオブジェクト・配列のいずれにも対応。詳細は§6）。**失敗した段階は `console.warn('[official] …')` で常時出力**（`npm run dev:debug` = `CUW_DEBUG=1` で本文・成功値も出す。トップレベルキー一覧と収集した extras ラベル一覧も dbg 出力）。失敗時 null→ローカルへ。`CUW_USAGE_ORIGIN` で origin 上書き可 |
+| `src/main/usage/collector.ts` | **ローカル推定（フォールバック）の中核**。`UsageCollector`（`projectsDir` を公開し watcher が監視先に使う）。`refresh()`/`buildSnapshot()`/`prune()`、モジュール関数 `readNewLines()`/`parseLine()`/`aggregate()`/`buildLimit(recs, baseline, windowMs)`（`source:'local'`）/`buildDaily()`（1パスで7日分を日別集計）。`buildSnapshot` は 5h/週間に加え、**7日間に Fable/Mythos の使用があれば `limits.extras` に「週(Fable)」ゲージ**を追加。`defaultClaudeDir()` |
+| `src/main/usage/pricing.ts` | `RATES` テーブル（Opus/Sonnet/Haiku/**Fable/Mythos**）＋`resolveRate()`（完全一致→`modelFamily()` で族を判定し `FAMILY_FALLBACK` の代表モデル単価）＋`estimateCost()` |
+| `src/main/usage/officialParse.ts` | 公式レスポンスの解析（Electron 非依存・テスト対象）。`mapUsage()`/`toLimit()`/`labelFor()`/`walkForExtras()`。挙動は下の officialUsage の説明どおり |
+| `src/main/usage/officialLog.ts` | `DEBUG`/`dbg()`/`warn()`（`[official]` プレフィックス。`CUW_DEBUG=1` で詳細） |
+| `src/main/usage/officialUsage.ts` | **公式取得（既定）**。Electron 依存部（ログイン窓・Cookie（`getCookies()`）・`net.request`・キャッシュ）。`openClaudeLogin()`（永続パーティション `persist:claudeai` で claude.ai ログイン窓。閉じたら `clearOfficialCache()`）/`isClaudeLoggedIn()`/`fetchOfficialLimits()`。フロー: ①`hasSessionCookie()`（`sessionKey` 有無）で未ログインなら通信せず null → ②`getOrgId()`：**Cookie候補名（`lastActiveOrgId`/`lastActiveOrg`/…）を試し、無ければ `GET /api/organizations` の `[0].uuid` を使う**（Cookie名がclaude.ai側で変わっても動くようAPIフォールバックが本命）→ ③`GET /api/organizations/{orgId}/usage` を `requestJson()`（`net.request`＋セッションCookie＋`Referer`、60秒キャッシュ）で叩き `{five_hour,seven_day}.utilization`(0..100) を `UsageLimits`(`source:'official'`) に変換。その他の `utilization` を持つキーは `mapUsage()`（export済み）内 `walkForExtras()` が**深さ2まで再帰的**に走査し `extras: LabeledLimit[]` として `labelFor()` で自動収集（フラット・ネストオブジェクト・配列のいずれにも対応。詳細は§6）。**失敗した段階は `console.warn('[official] …')` で常時出力**（`npm run dev:debug` = `CUW_DEBUG=1` で本文・成功値も出す。トップレベルキー一覧と収集した extras ラベル一覧も dbg 出力）。失敗時 null→ローカルへ。`CUW_USAGE_ORIGIN` で origin 上書き可 |
 | `src/main/usage/watcher.ts` | `UsageWatcher`。監視＋ポーリング＋デバウンス、`tick()`/`emitCurrent()`/`buildAndEmit()`（`useOfficialUsage`時に公式で 5h/週間を上書きしつつ **`mergeExtras()` でローカルの週(Fable)等 extras を残す**、取得失敗ならローカルのまま。merge後、**`showFableWeekly:false` なら公式由来も含めて `/fable\|mythos/i` にマッチする extras を除外**——ローカル collector は生成時点でこの設定を見るが、公式 extras は素通しされるため merge 後に一律フィルタする）/`stop()` |
 | `src/main/usage/collect-cli.ts` | `npm run collect` 用。集計結果を標準出力（Electron 不要の検証手段。**常にローカル推定のみ**——officialUsage は Electron 依存のためCLIでは呼ばない） |
-| `src/preload/index.ts` | `contextBridge.exposeInMainWorld('widget', api)`。`onUsage/getSettings/setSettings/refresh/loginClaude/quit` |
+| `src/preload/index.ts` | `contextBridge.exposeInMainWorld('widget', api)`。`onUsage/onSettings/getSettings/setSettings/refresh/loginClaude/quit` |
 | `src/preload/index.d.ts` | renderer 用に `window.widget` 型を宣言 |
-| `src/renderer/App.tsx` | 購読・設定取得・ターミナル風ヘッダ・設定オーバーレイ・ステータスバー・パネル組み立て |
+| `src/renderer/App.tsx` | 購読（使用量・設定）・設定取得・ターミナル風ヘッダ・ステータスバー・パネル組み立て |
+| `src/renderer/components/SettingsPanel.tsx` | 設定オーバーレイ。基準値（Mtok 入力）とトグルは `BASELINES`/`TOGGLES` 配列から生成。項目追加は配列に1行足す |
 | `src/renderer/components/*` | `LimitPanel`（5h/週間+`extras`のゲージ列＋未ログイン時のログイン促しボタン。パネルヘッダが「☁ 公式 /usage」（`official===true`）のとき、`Gauge` に `markLocalEstimate` を渡し `plan.source==='local'` なゲージのラベルへ「（推定）」を付与——公式値が来ない週(Fable)等をローカル推定と分かるように表示。公式由来の Fable extra が来ればサフィックスなし）/`TokenPanel`/`CostPanel`/`DailyChart`（直近7日の日毎トークン棒グラフ・単一系列コーラル）/`Clawd`（自作SVGマスコット、コーラル単色） |
-| `src/renderer/format.ts` | `fmtTokens`(5.1M形式)/`fmtUSD`/`shortModel`(fable対応済)/`fmtResetTime`（同日ならHH:MM、別日ならM/D HH:MM） |
+| `src/renderer/format.ts` | `fmtTokens`(5.1M形式)/`fmtUSD`/`shortModel`（`modelFamily()` で族名表示）/`fmtResetTime`（同日ならHH:MM、別日ならM/D HH:MM）/`fmtClock`（HH:MM:SS） |
 | `src/shared/types.ts` | `UsageSnapshot`/`WindowAggregate`/`ModelTokens`/`PlanLimit`/`LabeledLimit`/`UsageLimits`(`extras?`)/`WidgetSettings`/`DEFAULT_SETTINGS`（`useOfficialUsage: true`） |
-| `src/shared/ipc.ts` | IPC チャンネル名定数 `IPC`（`claudeLogin` 追加） |
+| `src/shared/ipc.ts` | IPC チャンネル名定数 `IPC` |
+| `src/shared/usage.ts` | main・renderer 共通の純粋関数: `sumTokens`/`clamp01`/`usageLevel`（ok<0.7≤warn<0.9≤danger）/`isOfficialLimits`/`modelFamily`/`familyLabel`/`isFableFamily`。**トークン合計・色段階・Fable判定はここ以外で書かない** |
 | `scripts/make-icon.mjs` | `resources/icon.png` を zlib のみで生成（依存なし） |
 
 ---
@@ -182,6 +189,7 @@ WidgetSettings {
 | `usage:update` | main→renderer | send | `UsageSnapshot` |
 | `settings:get` | renderer→main | invoke | → `WidgetSettings` |
 | `settings:set` | renderer→main | invoke | `Partial<WidgetSettings>` → `WidgetSettings` |
+| `settings:changed` | main→renderer | send | `WidgetSettings`（トレイからの変更も含め、変更のたびに送る） |
 | `usage:refresh` | renderer→main | invoke | → `UsageSnapshot \| null`（再スキャン後） |
 | `claude:login` | renderer→main | send | なし（`openClaudeLogin()` を呼ぶだけ） |
 | `app:quit` | renderer→main | send | なし |
@@ -198,7 +206,7 @@ renderer からは `window.widget.*`（preload）経由でのみアクセス。`
 - 自動起動は `applyLoginItem(enabled)`（`index.ts`）経由でのみ行う。**直接 `app.setLoginItemSettings()` を呼ばないこと**——`app.isPackaged` でガードしており、dev では設定値に関わらず常に `openAtLogin:false` を送って stale 登録を掃除する（§10 の罠を参照）。
 - claude.ai のログインセッションは Cookie として Electron の永続パーティション `persist:claudeai` に保存される（`settings.json` 等とは別の永続化先）。
 - 公式取得結果は `officialUsage.ts` 内のモジュールスコープ変数で **60秒メモリキャッシュ**（`clearOfficialCache()` でログイン直後に破棄）。ディスクには保存しない。
-- 設定の単一の真実は **main 側の `settingsStore`**。renderer・トレイ双方が `settings:set` / メニューハンドラ経由で更新し、`emitCurrent()`（ローカル値のみ再送）または `tick()`（`useOfficialUsage` 変更時。公式再取得を伴うため）で反映。
+- 設定の単一の真実は **main 側の `settingsStore`**。renderer（`settings:set`）・トレイのどちらからの変更も `applySettingsPatch()` を通り、`emitCurrent()`（ローカル値のみ再送）または `tick()`（`useOfficialUsage` 変更時。公式再取得を伴うため）で反映したうえで、renderer へ `settings:changed` を送る。
 
 ---
 
@@ -207,7 +215,7 @@ renderer からは `window.widget.*`（preload）経由でのみアクセス。`
 - `widget` ルートが半透明ダークカード（`styles.css` の CSS 変数で配色）。**3段構成**: `.term-header`（ターミナル風・`claude@usage`＋点滅カーソル）→ `.body`（パネル群、`position:relative` で設定オーバーレイの土台）→ `.statusbar`（Clawdマスコット＋モード表示＋時刻）。
 - ヘッダに `-webkit-app-region: drag`、ボタン・設定オーバーレイ・ログインボタン等の操作要素には全て `no-drag`（付け忘れるとクリックがドラッグに吸われる）。
 - 設定パネルは `.settings-overlay`（`position:absolute; inset:0`）として **body の上に重ねる**。旧実装のようにパネル群の下に追加すると、開閉のたびにウィンドウ高さが変わってしまうため。
-- ゲージ色は `fraction` で `ok(<0.7)/warn(<0.9)/danger(>=0.9)`（`LimitPanel.tsx` の `level()`）。`extras` も同じ `Gauge` コンポーネントで描画。
+- ゲージ色は `fraction` で `ok(<0.7)/warn(<0.9)/danger(>=0.9)`（`shared/usage.ts` の `usageLevel()`。トレイのリングゲージも同じ関数）。`extras` も同じ `Gauge` コンポーネントで描画。
 - `officialRequested && !official`（クラウード希望だが公式値が出ていない＝未ログイン/取得失敗）のとき `LimitPanel` にログイン促しボタンを表示。押すと `window.widget.loginClaude()` → IPC `claude:login` → `openClaudeLogin()`。
 - `snap.status` が非 null のときは集計を出さずステータス文言を表示。
 - CSP は `index.html` の meta で `default-src 'self'`（`unsafe-inline` は style のみ許可）。ログインウィンドウ（`officialUsage.openClaudeLogin`）は別の `BrowserWindow` で `contextIsolation:true` のみ・preload無し（claude.ai を素で表示するだけのため）。
@@ -260,6 +268,7 @@ npm run collect
 ### 型・ビルド
 ```bash
 npm run typecheck   # tsconfig.node.json + tsconfig.web.json
+npm test            # test/*.test.ts（node:test + tsx。collector・公式解析・単価・共通関数）
 npm run build       # out/ に main/preload/renderer
 ```
 

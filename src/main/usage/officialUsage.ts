@@ -1,15 +1,17 @@
 import { session as electronSession, net, BrowserWindow } from 'electron'
-import type { LabeledLimit, PlanLimit, UsageLimits } from '../../shared/types'
+import type { UsageLimits } from '../../shared/types'
+import { mapUsage } from './officialParse'
+import { DEBUG, dbg, warn } from './officialLog'
 
 /**
- * 公式 /usage 実データ（オプトイン）。
+ * 公式 /usage 実データ（既定ON。設定で無効化可）。
  *
  * 方式（https://zenn.dev/nihondo/articles/af972fa985f5ac を参考）:
  *   - エンドポイント: GET https://claude.ai/api/organizations/{orgId}/usage
  *   - 認証: claude.ai の**セッションCookie**（API の OAuth トークンではない）
- *   - orgId: Cookie `lastActiveOrgId` から取得
- *   - レスポンス: { five_hour:{utilization,resets_at}, seven_day:{utilization,resets_at} }
- *     （utilization は 0..100 のパーセント）
+ *   - orgId: Cookie `lastActiveOrgId` 等、無ければ `/api/organizations` から取得
+ *   - レスポンス: { five_hour:{utilization,resets_at}, seven_day:{utilization,resets_at}, ... }
+ *     （utilization は 0..100 のパーセント。解析は officialParse.ts）
  *
  * Cookie は Electron の永続パーティションに保持し、ユーザーは専用ウィンドウで
  * claude.ai に一度ログインする。以降はそのセッションで自動的に Cookie が付く。
@@ -23,30 +25,25 @@ const ORIGIN = process.env.CUW_USAGE_ORIGIN || 'https://claude.ai'
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 
-// 診断ログ: 失敗は常に warn、詳細（本文・成功値）は CUW_DEBUG=1 のときだけ。
-// trim(): cmd の `set VAR=1 && ...` 形式だと値に末尾スペースが入るため防御
-const DEBUG = ['1', 'true'].includes((process.env.CUW_DEBUG ?? '').trim())
-function dbg(...a: unknown[]): void {
-  if (DEBUG) console.log('[official]', ...a)
-}
-function warn(...a: unknown[]): void {
-  console.warn('[official]', ...a)
-}
-
 let loginWindow: BrowserWindow | null = null
 
 function claudeSession(): Electron.Session {
   return electronSession.fromPartition(PARTITION)
 }
 
+/** claude.ai の Cookie 一覧。読めなければ空配列 */
+async function getCookies(): Promise<Electron.Cookie[]> {
+  try {
+    return await claudeSession().cookies.get({ url: ORIGIN })
+  } catch {
+    return []
+  }
+}
+
 /** claude.ai にログイン済みか（セッションCookieの有無で判定） */
 export async function isClaudeLoggedIn(): Promise<boolean> {
-  try {
-    const cookies = await claudeSession().cookies.get({ url: ORIGIN })
-    return cookies.some((c) => c.name === 'sessionKey' || c.name === 'lastActiveOrgId')
-  } catch {
-    return false
-  }
+  const cookies = await getCookies()
+  return cookies.some((c) => c.name === 'sessionKey' || c.name === 'lastActiveOrgId')
 }
 
 /** claude.ai ログイン用ウィンドウを開く（永続パーティションに Cookie を保存） */
@@ -75,12 +72,8 @@ export function openClaudeLogin(): void {
 
 /** claude.ai のセッションCookie（sessionKey）があるか＝ログイン済みか */
 async function hasSessionCookie(): Promise<boolean> {
-  try {
-    const cookies = await claudeSession().cookies.get({ url: ORIGIN })
-    return cookies.some((c) => c.name === 'sessionKey' && !!c.value)
-  } catch {
-    return false
-  }
+  const cookies = await getCookies()
+  return cookies.some((c) => c.name === 'sessionKey' && !!c.value)
 }
 
 /** claude.ai への GET（セッションCookie付き）。{status, json} を返す。到達不能なら null。 */
@@ -152,17 +145,13 @@ function requestJson(
  */
 async function getOrgId(timeoutMs: number): Promise<string | null> {
   // 1. Cookie 候補
-  try {
-    const cookies = await claudeSession().cookies.get({ url: ORIGIN })
-    for (const name of ['lastActiveOrgId', 'lastActiveOrg', 'activeOrganizationUuid', 'orgUuid']) {
-      const c = cookies.find((ck) => ck.name === name)
-      if (c?.value) {
-        dbg('orgId from cookie', name)
-        return decodeURIComponent(c.value)
-      }
+  const cookies = await getCookies()
+  for (const name of ['lastActiveOrgId', 'lastActiveOrg', 'activeOrganizationUuid', 'orgUuid']) {
+    const c = cookies.find((ck) => ck.name === name)
+    if (c?.value) {
+      dbg('orgId from cookie', name)
+      return decodeURIComponent(c.value)
     }
-  } catch {
-    /* fall through to API */
   }
   // 2. 組織一覧API
   const res = await requestJson('/api/organizations', timeoutMs)
@@ -178,114 +167,6 @@ async function getOrgId(timeoutMs: number): Promise<string | null> {
     warn('orgId 取得失敗', res ? `orgs HTTP=${res.status}` : '応答なし')
   }
   return null
-}
-
-/** five_hour / seven_day の1枠を PlanLimit に変換 */
-function toLimit(w: any): PlanLimit | null {
-  if (!w || typeof w.utilization !== 'number') return null
-  const fraction = Math.max(0, Math.min(1, w.utilization / 100))
-  const reset = w.resets_at ?? w.resetsAt ?? null
-  let iso: string | null = null
-  if (typeof reset === 'string') {
-    const t = Date.parse(reset)
-    iso = Number.isNaN(t) ? null : new Date(t).toISOString()
-  }
-  return { windowTokens: 0, baselineTokens: 0, fraction, windowResetsAt: iso, source: 'official' }
-}
-
-/** 追加枠のキー名を日本語ラベルへ（未知キーは整形して表示） */
-function labelFor(key: string): string {
-  const known: Record<string, string> = {
-    seven_day_oauth_apps: '週(アプリ)'
-  }
-  if (known[key]) return known[key]
-  // 一般化: <window>_<model> → 「<窓>(<Model>)」（例: seven_day_opus→週(Opus), seven_day_fable→週(Fable)）
-  const win = key.includes('seven_day') ? '週' : key.includes('five_hour') ? '5時間' : ''
-  const model = key.match(/(fable|mythos|opus|sonnet|haiku)/i)?.[1]
-  if (win && model) {
-    const m = model.charAt(0).toUpperCase() + model.slice(1).toLowerCase()
-    return `${win}(${m})`
-  }
-  return key
-    .replace(/seven_day/g, '週')
-    .replace(/five_hour/g, '5時間')
-    .replace(/_/g, ' ')
-    .trim()
-}
-
-/** `utilization`(number) を持つオブジェクトか判定 */
-function isUtilizationLeaf(v: unknown): v is Record<string, any> {
-  return !!v && typeof v === 'object' && typeof (v as any).utilization === 'number'
-}
-
-/** 配列要素のキーパス末尾セグメント。model/name/key の文字列フィールドがあればそれを使い、無ければ添字 */
-function arrayElementLabelSegment(el: Record<string, any>, index: number): string {
-  const v = el.model ?? el.name ?? el.key
-  return typeof v === 'string' && v ? v : String(index)
-}
-
-/**
- * `utilization` を持つオブジェクトを再帰的に探索し extras 候補を集める。
- * `depthLeft` は「現在のノードの子（またはその配列要素）を検査してよい残り階層数」。
- * 呼び出し元で depthLeft=1 を渡すと、このノード自身の子を検査する（＝深さ2）のみ許可し、
- * その子がさらに非leafでもそこから先（深さ3）へは descend しない。
- * five_hour/seven_day 相当や、既に extras として拾ったオブジェクトの子は二重に探索しない
- * （utilization leaf を見つけた時点でその配下へは descend しない）。
- */
-function walkForExtras(node: unknown, path: string[], depthLeft: number, out: LabeledLimit[]): void {
-  if (!node || typeof node !== 'object') return
-  if (Array.isArray(node)) {
-    node.forEach((el, idx) => {
-      if (isUtilizationLeaf(el)) {
-        const lim = toLimit(el)
-        if (lim) out.push({ label: labelFor([...path, arrayElementLabelSegment(el, idx)].join('_')), limit: lim })
-        return
-      }
-      if (depthLeft > 1) walkForExtras(el, path, depthLeft - 1, out)
-    })
-    return
-  }
-  for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
-    if (isUtilizationLeaf(v)) {
-      const lim = toLimit(v)
-      if (lim) out.push({ label: labelFor([...path, k].join('_')), limit: lim })
-      continue
-    }
-    if (depthLeft > 1) walkForExtras(v, [...path, k], depthLeft - 1, out)
-  }
-}
-
-/**
- * レスポンスを UsageLimits に変換。five_hour/seven_day は必須トップレベル、
- * その他の `utilization` を持つキーは extras（例: 週(Opus)）として拾う。
- * トップレベルキー自体が `utilization` を持つ従来のフラット形状（例: seven_day_opus）に加え、
- * `{ model_limits: { fable: { utilization } } }` のようなネストや、
- * `[{ model: 'fable', utilization, resets_at }]` のような配列も**深さ2まで**再帰的に探索する。
- * 実レスポンス形状は未検証のため防御的に処理する。
- */
-export function mapUsage(data: any): UsageLimits | null {
-  if (!data || typeof data !== 'object') return null
-  dbg('response top-level keys:', Object.keys(data))
-  const five = toLimit(data.five_hour)
-  const week = toLimit(data.seven_day)
-  if (!five || !week) return null
-  const extras: LabeledLimit[] = []
-  for (const [key, val] of Object.entries(data)) {
-    if (key === 'five_hour' || key === 'seven_day') continue
-    const lim = toLimit(val)
-    if (lim) {
-      // フラット形状: このキー自体が utilization leaf → 子は探索しない
-      extras.push({ label: labelFor(key), limit: lim })
-      continue
-    }
-    // ネスト/配列形状: この階層(1)+1階層=深さ2まで utilization leaf を探索
-    walkForExtras(val, [key], 1, extras)
-  }
-  dbg(
-    'extras collected:',
-    extras.map((e) => e.label)
-  )
-  return { fiveHour: five, weekly: week, extras: extras.length ? extras : undefined }
 }
 
 /** usage エンドポイントを叩いて UsageLimits に変換 */

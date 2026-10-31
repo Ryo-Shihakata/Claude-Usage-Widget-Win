@@ -1,22 +1,22 @@
 import { homedir } from 'os'
-import { join } from 'path'
-import { promises as fs } from 'fs'
+import { basename, join } from 'path'
+import { promises as fs, type Dirent } from 'fs'
 import {
   emptyAggregate,
   type DailyUsage,
-  type LabeledLimit,
-  type ModelTokens,
   type PlanLimit,
   type UsageLimits,
   type UsageSnapshot,
   type WidgetSettings,
   type WindowAggregate
 } from '../../shared/types'
+import { isFableFamily } from '../../shared/usage'
 import { estimateCost } from './pricing'
 
 const HOUR = 60 * 60 * 1000
 const DAY = 24 * HOUR
 const FIVE_HOURS = 5 * HOUR
+const SEVEN_DAYS = 7 * DAY
 
 /** assistant 応答1件分の軽量レコード */
 interface UsageRecord {
@@ -28,6 +28,10 @@ interface UsageRecord {
   output: number
   cacheCreate: number
   cacheRead: number
+}
+
+function recordTokens(r: UsageRecord): number {
+  return r.input + r.output + r.cacheCreate + r.cacheRead
 }
 
 /** Claude Code のデータディレクトリ（CLAUDE_CONFIG_DIR 環境変数を尊重） */
@@ -92,35 +96,86 @@ function parseLine(line: string, sessionId: string): UsageRecord | null {
   }
 }
 
+/** 読めないディレクトリは空として扱う */
+async function readDirSafe(dir: string): Promise<Dirent[]> {
+  try {
+    return await fs.readdir(dir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+}
+
+/** ローカル日付 'YYYY-MM-DD' */
+function localDateKey(ms: number): string {
+  const d = new Date(ms)
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+function aggregate(records: UsageRecord[]): WindowAggregate {
+  const agg = emptyAggregate()
+  for (const r of records) {
+    const m = (agg.byModel[r.model] ??= {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0
+    })
+    m.inputTokens += r.input
+    m.outputTokens += r.output
+    m.cacheCreationTokens += r.cacheCreate
+    m.cacheReadTokens += r.cacheRead
+    agg.totalTokens += recordTokens(r)
+    agg.messageCount += 1
+  }
+  for (const [model, t] of Object.entries(agg.byModel)) {
+    agg.costUSD += estimateCost(model, t)
+  }
+  return agg
+}
+
+/** 枠内レコードと基準値から PlanLimit を作る。リセット目安は枠内で最も古いレコード + 枠長 */
+function buildLimit(recs: UsageRecord[], baselineRaw: number, windowMs: number): PlanLimit {
+  const windowTokens = recs.reduce((s, r) => s + recordTokens(r), 0)
+  const baseline = Math.max(1, baselineRaw)
+  const oldest = recs.reduce((min, r) => Math.min(min, r.ts), Infinity)
+  return {
+    windowTokens,
+    baselineTokens: baseline,
+    fraction: Math.min(1, windowTokens / baseline),
+    windowResetsAt: Number.isFinite(oldest) ? new Date(oldest + windowMs).toISOString() : null,
+    source: 'local'
+  }
+}
+
+/** 今日を末尾とする直近7日の日毎トークン（ローカル日境界、使用0の日も含め常に7要素） */
+function buildDaily(records: UsageRecord[], todayStart: number): DailyUsage[] {
+  const firstStart = todayStart - 6 * DAY
+  const tokens = new Array<number>(7).fill(0)
+  for (const r of records) {
+    const i = Math.floor((r.ts - firstStart) / DAY)
+    if (i >= 0 && i < 7) tokens[i] += recordTokens(r)
+  }
+  return tokens.map((t, i) => ({ date: localDateKey(firstStart + i * DAY), tokens: t }))
+}
+
 export class UsageCollector {
   private records: UsageRecord[] = []
   private offsets = new Map<string, number>()
   private seenIds = new Set<string>()
-  private projectsDir: string
+  readonly projectsDir: string
 
   constructor(baseDir?: string) {
     this.projectsDir = join(baseDir ?? defaultClaudeDir(), 'projects')
   }
 
-  /** projects 配下の全 *.jsonl を列挙 */
+  /** projects/<project>/*.jsonl を列挙 */
   private async listJsonlFiles(): Promise<string[]> {
     const out: string[] = []
-    let entries: import('fs').Dirent[]
-    try {
-      entries = await fs.readdir(this.projectsDir, { withFileTypes: true })
-    } catch {
-      return out
-    }
-    for (const dir of entries) {
+    for (const dir of await readDirSafe(this.projectsDir)) {
       if (!dir.isDirectory()) continue
       const sub = join(this.projectsDir, dir.name)
-      let files: import('fs').Dirent[]
-      try {
-        files = await fs.readdir(sub, { withFileTypes: true })
-      } catch {
-        continue
-      }
-      for (const f of files) {
+      for (const f of await readDirSafe(sub)) {
         if (f.isFile() && f.name.endsWith('.jsonl')) out.push(join(sub, f.name))
       }
     }
@@ -140,11 +195,9 @@ export class UsageCollector {
       }
     }
     for (const file of files) {
-      const offset = this.offsets.get(file) ?? 0
-      const { lines, newOffset } = await readNewLines(file, offset)
+      const { lines, newOffset } = await readNewLines(file, this.offsets.get(file) ?? 0)
       this.offsets.set(file, newOffset)
-      if (lines.length === 0) continue
-      const sessionId = file.slice(file.lastIndexOf('/') + 1).replace(/\.jsonl$/, '')
+      const sessionId = basename(file, '.jsonl')
       for (const line of lines) {
         const rec = parseLine(line, sessionId)
         if (!rec || this.seenIds.has(rec.id)) continue
@@ -158,8 +211,7 @@ export class UsageCollector {
 
   /** 7日より古いレコードを破棄（メモリ上限を保つ） */
   private prune(): void {
-    const cutoff = Date.now() - 7 * DAY
-    if (this.records.length === 0) return
+    const cutoff = Date.now() - SEVEN_DAYS
     const kept: UsageRecord[] = []
     for (const r of this.records) {
       if (r.ts >= cutoff) kept.push(r)
@@ -168,118 +220,44 @@ export class UsageCollector {
     this.records = kept
   }
 
-  private aggregate(records: UsageRecord[]): WindowAggregate {
-    const agg = emptyAggregate()
-    for (const r of records) {
-      let m = agg.byModel[r.model]
-      if (!m) {
-        m = { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0 }
-        agg.byModel[r.model] = m
-      }
-      m.inputTokens += r.input
-      m.outputTokens += r.output
-      m.cacheCreationTokens += r.cacheCreate
-      m.cacheReadTokens += r.cacheRead
-      agg.totalTokens += r.input + r.output + r.cacheCreate + r.cacheRead
-      agg.messageCount += 1
-    }
-    for (const [model, t] of Object.entries(agg.byModel)) {
-      agg.costUSD += estimateCost(model, t as ModelTokens)
-    }
-    return agg
-  }
-
   /** 現在のレコードから表示用スナップショットを生成 */
   buildSnapshot(settings: WidgetSettings, found = true): UsageSnapshot {
     const now = Date.now()
-    const midnight = new Date()
+    const midnight = new Date(now)
     midnight.setHours(0, 0, 0, 0)
     const todayStart = midnight.getTime()
-    const fiveHAgo = now - FIVE_HOURS
-    const sevenDAgo = now - 7 * DAY
 
     const todayRecs = this.records.filter((r) => r.ts >= todayStart)
-    const last5hRecs = this.records.filter((r) => r.ts >= fiveHAgo)
-    const last7dRecs = this.records.filter((r) => r.ts >= sevenDAgo)
-
-    const sessions = new Set(todayRecs.map((r) => r.sessionId))
-
-    const last5h = this.aggregate(last5hRecs)
-    const last7d = this.aggregate(last7dRecs)
+    const last5hRecs = this.records.filter((r) => r.ts >= now - FIVE_HOURS)
+    const last7dRecs = this.records.filter((r) => r.ts >= now - SEVEN_DAYS)
 
     const limits: UsageLimits = {
-      fiveHour: buildLimit(
-        last5h.totalTokens,
-        settings.fiveHourBaselineTokens,
-        last5hRecs,
-        FIVE_HOURS
-      ),
-      weekly: buildLimit(last7d.totalTokens, settings.weeklyBaselineTokens, last7dRecs, 7 * DAY)
+      fiveHour: buildLimit(last5hRecs, settings.fiveHourBaselineTokens, FIVE_HOURS),
+      weekly: buildLimit(last7dRecs, settings.weeklyBaselineTokens, SEVEN_DAYS)
     }
 
     // Fable/Mythos 専用の週間枠（ローカル推定）。設定ONかつ Fable 使用があるときだけ追加。
     if (settings.showFableWeekly) {
-      const fableRecs = last7dRecs.filter((r) => /fable|mythos/i.test(r.model))
+      const fableRecs = last7dRecs.filter((r) => isFableFamily(r.model))
       if (fableRecs.length > 0) {
-        const fableTokens = fableRecs.reduce(
-          (s, r) => s + r.input + r.output + r.cacheCreate + r.cacheRead,
-          0
-        )
-        const extras: LabeledLimit[] = [
+        limits.extras = [
           {
             label: '週(Fable)',
-            limit: buildLimit(fableTokens, settings.fableWeeklyBaselineTokens, fableRecs, 7 * DAY)
+            limit: buildLimit(fableRecs, settings.fableWeeklyBaselineTokens, SEVEN_DAYS)
           }
         ]
-        limits.extras = extras
       }
-    }
-
-    // 直近7日の日毎トークン（ローカル日境界で集計、常に7要素・使用0の日も含む）
-    const daily: DailyUsage[] = []
-    for (let i = 6; i >= 0; i--) {
-      const dayStart = todayStart - i * DAY
-      const dayEnd = dayStart + DAY
-      let tokens = 0
-      for (const r of this.records) {
-        if (r.ts >= dayStart && r.ts < dayEnd) {
-          tokens += r.input + r.output + r.cacheCreate + r.cacheRead
-        }
-      }
-      const d = new Date(dayStart)
-      const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
-        d.getDate()
-      ).padStart(2, '0')}`
-      daily.push({ date, tokens })
     }
 
     return {
       generatedAt: new Date(now).toISOString(),
-      today: this.aggregate(todayRecs),
-      last5h,
-      last7d,
+      today: aggregate(todayRecs),
+      last5h: aggregate(last5hRecs),
+      last7d: aggregate(last7dRecs),
       limits,
-      daily,
-      sessionCount: sessions.size,
+      daily: buildDaily(this.records, todayStart),
+      sessionCount: new Set(todayRecs.map((r) => r.sessionId)).size,
       status: found ? null : 'Claude Code のデータが見つかりません'
     }
-  }
-}
-
-/** 枠の消費量・基準・最古レコードから PlanLimit を作る */
-function buildLimit(
-  windowTokens: number,
-  baselineRaw: number,
-  recs: { ts: number }[],
-  windowMs: number
-): PlanLimit {
-  const baseline = Math.max(1, baselineRaw)
-  const oldest = recs.reduce((min, r) => Math.min(min, r.ts), Infinity)
-  return {
-    windowTokens,
-    baselineTokens: baseline,
-    fraction: Math.min(1, windowTokens / baseline),
-    windowResetsAt: Number.isFinite(oldest) ? new Date(oldest + windowMs).toISOString() : null,
-    source: 'local'
   }
 }

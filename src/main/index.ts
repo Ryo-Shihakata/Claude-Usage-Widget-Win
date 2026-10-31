@@ -1,4 +1,12 @@
-import { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  Tray,
+  Menu,
+  ipcMain,
+  nativeImage,
+  type MenuItemConstructorOptions
+} from 'electron'
 import { join } from 'path'
 import { existsSync } from 'fs'
 import { createWidgetWindow, type WindowBounds } from './window'
@@ -70,8 +78,7 @@ function updateTrayIndicator(snap: UsageSnapshot): void {
 }
 
 function applyAlwaysOnTop(value: boolean): void {
-  if (!win) return
-  win.setAlwaysOnTop(value, 'screen-saver')
+  win?.setAlwaysOnTop(value, 'screen-saver')
 }
 
 /**
@@ -81,11 +88,7 @@ function applyAlwaysOnTop(value: boolean): void {
  * よって dev では常に解除し、stale なスタートアップ登録も掃除する。
  */
 function applyLoginItem(enabled: boolean): void {
-  if (app.isPackaged) {
-    app.setLoginItemSettings({ openAtLogin: enabled })
-  } else {
-    app.setLoginItemSettings({ openAtLogin: false })
-  }
+  app.setLoginItemSettings({ openAtLogin: app.isPackaged && enabled })
 }
 
 function buildTray(): void {
@@ -96,52 +99,33 @@ function buildTray(): void {
   tray.on('click', () => toggleWindow())
 }
 
+/** 真偽値の設定を切り替えるトレイのチェックボックス項目 */
+type BooleanSettingKey = {
+  [K in keyof WidgetSettings]: WidgetSettings[K] extends boolean ? K : never
+}[keyof WidgetSettings]
+
+function settingCheckbox(
+  label: string,
+  key: BooleanSettingKey,
+  s: WidgetSettings
+): MenuItemConstructorOptions {
+  return {
+    label,
+    type: 'checkbox',
+    checked: s[key],
+    click: (item) => applySettingsPatch({ [key]: item.checked })
+  }
+}
+
 function refreshTrayMenu(): void {
   if (!tray) return
   const s = settingsStore.get()
   const menu = Menu.buildFromTemplate([
     { label: '表示 / 非表示', click: () => toggleWindow() },
-    {
-      label: '常に最前面',
-      type: 'checkbox',
-      checked: s.alwaysOnTop,
-      click: (item) => {
-        const next = settingsStore.set({ alwaysOnTop: item.checked })
-        applyAlwaysOnTop(next.alwaysOnTop)
-        watcher?.emitCurrent()
-      }
-    },
-    {
-      label: 'コスト表示',
-      type: 'checkbox',
-      checked: s.showCost,
-      click: (item) => {
-        settingsStore.set({ showCost: item.checked })
-        watcher?.emitCurrent()
-        refreshTrayMenu()
-      }
-    },
-    {
-      label: 'OS起動時に自動起動',
-      type: 'checkbox',
-      checked: s.launchAtLogin,
-      click: (item) => {
-        settingsStore.set({ launchAtLogin: item.checked })
-        applyLoginItem(item.checked)
-        refreshTrayMenu()
-      }
-    },
-    {
-      label: '公式 /usage を使う（実験的）',
-      type: 'checkbox',
-      checked: s.useOfficialUsage,
-      click: (item) => {
-        settingsStore.set({ useOfficialUsage: item.checked })
-        if (item.checked) void ensureClaudeLogin()
-        void watcher?.tick()
-        refreshTrayMenu()
-      }
-    },
+    settingCheckbox('常に最前面', 'alwaysOnTop', s),
+    settingCheckbox('コスト表示', 'showCost', s),
+    settingCheckbox('OS起動時に自動起動', 'launchAtLogin', s),
+    settingCheckbox('公式 /usage を使う（実験的）', 'useOfficialUsage', s),
     { label: 'claude.ai にログイン（公式 /usage 用）', click: () => openClaudeLogin() },
     { type: 'separator' },
     { label: '今すぐ更新', click: () => void watcher?.tick() },
@@ -162,21 +146,26 @@ function toggleWindow(): void {
   else win.show()
 }
 
+/**
+ * 設定変更の唯一の入口（設定オーバーレイ・トレイの両方から呼ぶ）。
+ * 保存 → OS/ウィンドウへの反映 → 再集計 → トレイ・renderer へ通知。
+ */
+function applySettingsPatch(patch: Partial<WidgetSettings>): WidgetSettings {
+  const next = settingsStore.set(patch)
+  if (patch.alwaysOnTop !== undefined) applyAlwaysOnTop(next.alwaysOnTop)
+  if (patch.launchAtLogin !== undefined) applyLoginItem(next.launchAtLogin)
+  if (patch.useOfficialUsage === true) void ensureClaudeLogin()
+  // 公式トグル変更時は再取得（emitCurrent は再フェッチしないため tick を使う）
+  if (patch.useOfficialUsage !== undefined) void watcher?.tick()
+  else watcher?.emitCurrent()
+  refreshTrayMenu()
+  win?.webContents.send(IPC.settingsChanged, next)
+  return next
+}
+
 function registerIpc(): void {
   ipcMain.handle(IPC.settingsGet, () => settingsStore.get())
-  ipcMain.handle(IPC.settingsSet, (_e, patch: Partial<WidgetSettings>) => {
-    const next = settingsStore.set(patch)
-    if (patch.alwaysOnTop !== undefined) applyAlwaysOnTop(next.alwaysOnTop)
-    if (patch.launchAtLogin !== undefined) {
-      applyLoginItem(next.launchAtLogin)
-    }
-    if (patch.useOfficialUsage === true) void ensureClaudeLogin()
-    // 公式トグル変更時は再取得（emitCurrent は再フェッチしないため tick を使う）
-    if (patch.useOfficialUsage !== undefined) void watcher?.tick()
-    else watcher?.emitCurrent()
-    refreshTrayMenu()
-    return next
-  })
+  ipcMain.handle(IPC.settingsSet, (_e, patch: Partial<WidgetSettings>) => applySettingsPatch(patch))
   ipcMain.handle(IPC.refresh, async () => {
     await watcher?.tick()
     return lastSnapshot

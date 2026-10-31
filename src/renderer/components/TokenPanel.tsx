@@ -1,4 +1,5 @@
 import type { WindowAggregate } from '../../shared/types'
+import { sumTokens } from '../../shared/usage'
 import { fmtTokens, shortModel } from '../format'
 
 export function TokenPanel({
@@ -10,10 +11,7 @@ export function TokenPanel({
 }): JSX.Element {
   // トークン合計の多い順に上位2モデルを表示
   const models = Object.entries(today.byModel)
-    .map(([model, t]) => ({
-      model,
-      total: t.inputTokens + t.outputTokens + t.cacheCreationTokens + t.cacheReadTokens
-    }))
+    .map(([model, t]) => ({ model, total: sumTokens(t) }))
     .sort((a, b) => b.total - a.total)
     .slice(0, 2)
 
