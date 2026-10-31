@@ -18,10 +18,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - run: npm test
+      # インストーラとポータブルが並行アップロードすると下書きが2つできるため、先に1つ作っておく
+      # （electron-builder は同じタグの既存の下書きにアップロードする）
+      - run: gh release view "$TAG" || gh release create "$TAG" --draft --title "$TAG" --notes ""
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
       - run: npm run release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
